@@ -51,6 +51,8 @@
   <link rel="manifest" id="the-manifest-placeholder" href="./%TG_MANIFEST%">
 
   <script vite-ignore src="./redirect.js"></script>
+  <!-- Svipe: sync MTProto session with the Web K build served on this origin (see public/session-bridge.js) -->
+  <script vite-ignore src="./session-bridge.js?v=1"></script>
   <style>
     @layer reset, variables, ui, components;
     @layer ui {
