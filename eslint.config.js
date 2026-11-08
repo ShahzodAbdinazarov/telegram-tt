@@ -34,6 +34,7 @@ export default defineConfig(
     'src/lib/fastBlur.js',
     'src/types/language.d.ts',
     'dist/',
+    'build-svipe/',
     'public/',
     'deploy/update_version.js',
     'tauri/target/',
