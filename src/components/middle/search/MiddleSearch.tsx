@@ -33,7 +33,7 @@ import {
 import { IS_IOS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import captureEscKeyListener from '../../../util/captureEscKeyListener';
-import { getDayStartAt } from '../../../util/dates/oldDateFormat';
+import { getDayStartAt } from '../../../util/dates/dateMath';
 import focusEditableElement from '../../../util/focusEditableElement';
 import focusNoScroll from '../../../util/focusNoScroll';
 import { getSearchResultKey, parseSearchResultKey, type SearchResultKey } from '../../../util/keys/searchResultKey';
@@ -49,7 +49,6 @@ import useInfiniteScroll from '../../../hooks/useInfiniteScroll';
 import useKeyboardListNavigation from '../../../hooks/useKeyboardListNavigation';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 import usePeerSearch, { prepareChatMemberSearch } from '../../../hooks/usePeerSearch';
 
 import Avatar from '../../common/Avatar';
@@ -90,8 +89,8 @@ type StateProps = {
 
 const CHANNELS_PEER: CustomPeer = {
   isCustomPeer: true,
-  avatarIcon: 'channel-filled',
-  titleKey: 'SearchPublicPosts',
+  avatarIcon: 'megaphone-filled',
+  titleKey: 'PublicPosts',
 };
 const FOCUSED_SEARCH_TRIGGER_OFFSET = 5;
 const HIDE_TIMEOUT = 200;
@@ -139,7 +138,7 @@ const MiddleSearch = ({
   const shouldCancelSearchRef = useRef(false);
 
   const { isMobile } = useAppLayout();
-  const oldLang = useOldLang();
+
   const lang = useLang();
 
   const [query, setQuery] = useState(requestedQuery || '');
@@ -413,9 +412,8 @@ const MiddleSearch = ({
       });
     }
 
-    // eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener
     window.addEventListener('touchend', focus);
-    // eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener
+
     window.addEventListener('mouseup', focus);
 
     window.addEventListener('touchstart', removeListeners);
@@ -627,7 +625,7 @@ const MiddleSearch = ({
           <PeerChip
             className={buildClassName(styles.searchType, isSelected && styles.selectedType)}
             peerId={chat?.id}
-            title={oldLang('SearchThisChat')}
+            title={lang('SearchThisChat')}
             clickArg="chat"
             onClick={isForTag ? handleDeleteTag : handleChangeSearchType}
           />
@@ -638,7 +636,7 @@ const MiddleSearch = ({
             className={buildClassName(styles.searchType, isSelected && styles.selectedType)}
             peerId={currentUserId}
             forceShowSelf
-            title={oldLang('SearchMyMessages')}
+            title={lang('SearchMyMessages')}
             clickArg="myChats"
             onClick={isForTag ? handleDeleteTag : handleChangeSearchType}
           />
@@ -648,7 +646,7 @@ const MiddleSearch = ({
           <PeerChip
             className={buildClassName(styles.searchType, isSelected && styles.selectedType)}
             customPeer={CHANNELS_PEER}
-            title={oldLang('SearchPublicPosts')}
+            title={lang('ProfileTabPublicPosts')}
             clickArg="channels"
             onClick={isForTag ? handleDeleteTag : handleChangeSearchType}
           />
@@ -722,16 +720,16 @@ const MiddleSearch = ({
             {isMemberSearchLoading && hasMemberDropdown && <Loading />}
             {displayedMembers?.map(renderMemberItem)}
             {hasMemberDropdown && !isMemberSearchLoading && !memberSearchResults?.length && (
-              <span className={styles.placeholder}>{oldLang('NoResult')}</span>
+              <span className={styles.placeholder}>{lang('ChatListSearchNoResults')}</span>
             )}
             {areResultsEmpty && (
               <span key="nothing" className={styles.placeholder}>
-                {oldLang('NoResultFoundFor', query)}
+                {lang('NoResultFoundFor', { query })}
               </span>
             )}
             {isOnlyHash && (
               <span key="enterhash" className={styles.placeholder}>
-                {oldLang('HashtagSearchPlaceholder')}
+                {lang('HashtagSearchPlaceholder')}
               </span>
             )}
             {!hasMemberDropdown && viewportResults?.map(({
@@ -790,7 +788,7 @@ const MiddleSearch = ({
           resultsItemSelector={`.${styles.results} .${RESULT_ITEM_CLASS_NAME}`}
           hasUpButton={hasNavigationButtons && !isMobile}
           hasDownButton={hasNavigationButtons && !isMobile}
-          placeholder={isHashtagQuery ? oldLang('SearchHashtagsHint') : oldLang('Search')}
+          placeholder={isHashtagQuery ? lang('SearchHashtagsHint') : lang('Search')}
           teactExperimentControlled
           onChange={handleQueryChange}
           onStartBackspace={handleDeleteTag}
@@ -829,7 +827,7 @@ const MiddleSearch = ({
                 size="smaller"
                 color="translucent"
                 onClick={handleFromFilterClick}
-                ariaLabel={oldLang('FilterByUser')}
+                ariaLabel={lang('SearchFilterByUser')}
                 iconName="user"
               />
             )}
@@ -838,7 +836,7 @@ const MiddleSearch = ({
               size="smaller"
               color="translucent"
               onClick={() => openHistoryCalendar({ selectedAt: getDayStartAt(Date.now()) })}
-              ariaLabel={oldLang('JumpToDate')}
+              ariaLabel={lang('JumpToDate')}
               iconName="calendar"
             />
           </div>
@@ -853,7 +851,7 @@ const MiddleSearch = ({
               size="smaller"
               color="translucent"
               onClick={handleFromFilterClick}
-              ariaLabel={oldLang('FilterByUser')}
+              ariaLabel={lang('SearchFilterByUser')}
               iconName="user"
             />
           )}
@@ -862,15 +860,15 @@ const MiddleSearch = ({
             size="smaller"
             color="translucent"
             onClick={() => openHistoryCalendar({ selectedAt: getDayStartAt(Date.now()) })}
-            ariaLabel={oldLang('JumpToDate')}
+            ariaLabel={lang('JumpToDate')}
             iconName="calendar"
           />
           <div className={styles.counter}>
             {hasQueryData && (
               foundIds?.length ? (
-                oldLang('Of', [Math.max(focusedIndex + 1, 1), totalCount])
+                lang('GiftAuctionRoundValue', { current: Math.max(focusedIndex + 1, 1), total: totalCount })
               ) : foundIds && !foundIds.length && (
-                oldLang('NoResult')
+                lang('ChatListSearchNoResults')
               )
             )}
           </div>
@@ -883,7 +881,7 @@ const MiddleSearch = ({
               noForcedUpperCase
               onClick={handleTriggerViewStyle}
             >
-              {isViewAsList ? oldLang('SearchAsChat') : oldLang('SearchAsList')}
+              {isViewAsList ? lang('SearchAsChat') : lang('SearchAsList')}
             </Button>
           )}
           {hasNavigationButtons && !hasResultsDropdown && (

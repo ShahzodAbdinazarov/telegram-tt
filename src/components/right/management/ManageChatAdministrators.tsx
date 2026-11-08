@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo, useMemo } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
@@ -10,8 +9,8 @@ import { selectChat, selectChatFullInfo } from '../../../global/selectors';
 import { partition } from '../../../util/iteratees';
 
 import useHistoryBack from '../../../hooks/useHistoryBack';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
 import PrivateChatInfo from '../../common/PrivateChatInfo';
 import Island, { IslandDescription } from '../../gili/layout/Island';
@@ -34,7 +33,7 @@ type StateProps = {
   adminMembersById?: Record<string, ApiChatMember>;
 };
 
-const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
+const ManageChatAdministrators = ({
   isActive,
   chat,
   isChannel,
@@ -43,9 +42,9 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
   onScreenSelect,
   onChatMemberSelect,
   onClose,
-}) => {
+}: OwnProps & StateProps) => {
   const { toggleSignatures } = getActions();
-  const lang = useOldLang();
+  const lang = useLang();
 
   useHistoryBack({
     isActive,
@@ -55,7 +54,7 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
   const areSignaturesEnabled = Boolean(chat?.areSignaturesShown);
   const areProfilesEnabled = Boolean(chat?.areProfilesShown);
 
-  const canAddNewAdmins = Boolean(chat?.isCreator || (chat && getHasAdminRight(chat, 'addAdmins')));
+  const canAddNewAdmins = Boolean(chat && getHasAdminRight(chat, 'addAdmins'));
   const canToggleSignatures = isChannel && getHasAdminRight(chat!, 'postMessages');
 
   const adminMembers = useMemo(() => {
@@ -103,7 +102,7 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
     const promotedByUser = member.promotedByUserId ? usersById[member.promotedByUserId] : undefined;
 
     if (promotedByUser) {
-      return lang('EditAdminPromotedBy', getUserFullName(promotedByUser));
+      return lang('EditAdminPromotedBy', { user: getUserFullName(lang, promotedByUser) });
     }
 
     return lang('ChannelAdmin');
@@ -114,7 +113,7 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
       <div className="panel-content custom-scroll">
         <Island>
           <ListItem
-            icon="recent"
+            icon="clock"
             multiline
             disabled
           >
@@ -124,9 +123,7 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
         </Island>
 
         <IslandDescription dir="auto">
-          {lang(isChannel
-            ? 'Channel.Management.AddModeratorHelp'
-            : 'Group.Management.AddModeratorHelp')}
+          {lang(isChannel ? 'ChannelManagementAddAdminDescription' : 'GroupManagementAddAdminDescription')}
         </IslandDescription>
         <Island dir={lang.isRtl ? 'rtl' : undefined}>
           {adminMembers.map((member) => (
@@ -147,7 +144,7 @@ const ManageChatAdministrators: FC<OwnProps & StateProps> = ({
           <FloatingActionButton
             isShown={canAddNewAdmins}
             onClick={handleAddAdminClick}
-            ariaLabel={lang('Channel.Management.AddModerator')}
+            ariaLabel={lang('ChannelManagementAddModerator')}
             iconName="add-user-filled"
           />
         </Island>

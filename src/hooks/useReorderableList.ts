@@ -18,7 +18,7 @@ type ReorderableListOptions<T extends ReorderableId> = {
   itemIds: T[];
   isDisabled?: boolean;
   withAutoscroll?: boolean;
-  onReorder: (itemIds: T[]) => void;
+  onReorder: (itemIds: T[], movedId?: T) => void;
 };
 
 type DragState<T extends ReorderableId> = {
@@ -64,6 +64,7 @@ export default function useReorderableList<T extends ReorderableId>({
   const itemIdsRef = useRef(itemIds);
   const pendingFocusIdRef = useRef<T | undefined>();
   const isAutoscrollScheduledRef = useRef(false);
+  const isMouseDragRef = useRef(false);
   const scrollContainerRef = useRef<HTMLElement | undefined>();
   const lastPointerYRef = useRef<number | undefined>();
   const [getDragState, setDragState] = useSignal<DragState<T> | undefined>();
@@ -82,14 +83,14 @@ export default function useReorderableList<T extends ReorderableId>({
     handleElementsRef.current?.get(pendingFocusId)?.focus();
   }, [itemIds]);
 
-  const reorder = useLastCallback((fromIndex: number, toIndex: number) => {
+  const reorder = useLastCallback((itemId: T, fromIndex: number, toIndex: number) => {
     if (fromIndex === toIndex) {
       return;
     }
 
     const nextItemIds = moveItem(itemIdsRef.current, fromIndex, toIndex);
     itemIdsRef.current = nextItemIds;
-    onReorder(nextItemIds);
+    onReorder(nextItemIds, itemId);
   });
 
   const reorderDraggedItem = useLastCallback((itemId: T, centerY: number, isMovingDown: boolean) => {
@@ -120,7 +121,7 @@ export default function useReorderableList<T extends ReorderableId>({
       return;
     }
 
-    const bounds = getVerticalBounds(itemIdsRef.current, rowElementsRef.current);
+    const bounds = getVerticalBounds(itemIdsRef.current, rowElementsRef.current, scrollContainerRef.current);
     const nextTop = y - dragState.offsetY;
     const clampedTop = bounds
       ? clamp(nextTop, bounds.top, Math.max(bounds.top, bounds.bottom - dragState.height))
@@ -206,6 +207,13 @@ export default function useReorderableList<T extends ReorderableId>({
   });
 
   const handleDrag = useLastCallback((event: MouseEvent | TouchEvent) => {
+    // A mouse release outside the window arrives as no event at all, so the first
+    // buttons-less move ends the drag. Touch drags get stray hover moves - skip them
+    if (isMouseDragRef.current && 'buttons' in event && event.buttons === 0) {
+      handleRelease();
+      return;
+    }
+
     if (event.cancelable) {
       event.preventDefault();
     }
@@ -215,6 +223,12 @@ export default function useReorderableList<T extends ReorderableId>({
 
     updateDragFromPointer(y);
     restartAutoscrollIfNeeded(y);
+  });
+
+  const handleVisibilityChange = useLastCallback(() => {
+    if (document.visibilityState === 'hidden') {
+      handleRelease();
+    }
   });
 
   const handleRelease = useLastCallback(() => {
@@ -254,6 +268,7 @@ export default function useReorderableList<T extends ReorderableId>({
     document.addEventListener('touchmove', handleDrag, { passive: true });
     document.addEventListener('touchend', handleRelease);
     document.addEventListener('touchcancel', handleRelease);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       document.removeEventListener('mousemove', handleDrag);
@@ -261,6 +276,7 @@ export default function useReorderableList<T extends ReorderableId>({
       document.removeEventListener('touchmove', handleDrag);
       document.removeEventListener('touchend', handleRelease);
       document.removeEventListener('touchcancel', handleRelease);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [draggedId]);
 
@@ -281,13 +297,20 @@ export default function useReorderableList<T extends ReorderableId>({
       return;
     }
 
+    isMouseDragRef.current = 'button' in event;
+
     const { y } = getPointerPosition(event);
     lastPointerYRef.current = y;
     const {
       left, top, width, height,
     } = rowElement.getBoundingClientRect();
 
-    const nextDragState = {
+    scrollContainerRef.current = withAutoscroll ? findScrollableContainer(rowElement) : undefined;
+    restartAutoscrollIfNeeded(y);
+
+    // Probed last: it dirties layout, so every other read in this handler stays on the clean one
+
+    setDragState({
       id: itemId,
       offsetY: y - top,
       left,
@@ -296,18 +319,13 @@ export default function useReorderableList<T extends ReorderableId>({
       translateY: 0,
       width,
       height,
-    };
-
-    setDragState(nextDragState);
+    });
     setDraggedId(itemId);
     setDraggedHeight(height);
-    scrollContainerRef.current = withAutoscroll ? findScrollableContainer(rowElement) : undefined;
-
-    restartAutoscrollIfNeeded(y);
   });
 
   const handleKeyboardReorder = useLastCallback((event: React.KeyboardEvent, itemId: T) => {
-    if (isDisabled || itemIdsRef.current.length < 2) {
+    if (isDisabled || itemIdsRef.current.length < 2 || getDragState()) {
       return;
     }
 
@@ -329,7 +347,7 @@ export default function useReorderableList<T extends ReorderableId>({
     event.preventDefault();
     event.stopPropagation();
     pendingFocusIdRef.current = itemId;
-    reorder(currentIndex, nextIndex);
+    reorder(itemId, currentIndex, nextIndex);
   });
 
   const getRowProps = useLastCallback((itemId: T): RowProps => {
@@ -461,8 +479,12 @@ function getTargetIndex<T extends ReorderableId>(
   return itemIds.length;
 }
 
-function getVerticalBounds<T extends ReorderableId>(itemIds: T[], rowElements: Map<T, HTMLElement>) {
-  return itemIds.reduce<{ top: number; bottom: number } | undefined>((bounds, id) => {
+function getVerticalBounds<T extends ReorderableId>(
+  itemIds: T[],
+  rowElements: Map<T, HTMLElement>,
+  scrollContainer?: HTMLElement,
+) {
+  const rowBounds = itemIds.reduce<{ top: number; bottom: number } | undefined>((bounds, id) => {
     const element = rowElements.get(id);
     if (!element) {
       return bounds;
@@ -478,6 +500,27 @@ function getVerticalBounds<T extends ReorderableId>(itemIds: T[], rowElements: M
       bottom: Math.max(bounds.bottom, bottom),
     };
   }, undefined);
+
+  if (!rowBounds || !scrollContainer) {
+    return rowBounds;
+  }
+
+  const visibleBounds = getVisibleBounds(scrollContainer);
+
+  return {
+    top: Math.max(rowBounds.top, visibleBounds.top),
+    bottom: Math.min(rowBounds.bottom, visibleBounds.bottom),
+  };
+}
+
+function getVisibleBounds(scrollContainer: HTMLElement) {
+  const { top, bottom } = scrollContainer.getBoundingClientRect();
+  const { paddingTop, paddingBottom } = getComputedStyle(scrollContainer);
+
+  return {
+    top: top + parseFloat(paddingTop),
+    bottom: bottom - parseFloat(paddingBottom),
+  };
 }
 
 function findScrollableContainer(element: HTMLElement) {

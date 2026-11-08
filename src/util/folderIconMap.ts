@@ -1,13 +1,13 @@
 import type { IconName } from '../types/icons';
 
 export const folderIconMap: Record<string, IconName> = {
-  '🗂': 'folder-tabs-folder',
-  '⭐': 'folder-tabs-star',
+  '🗂': 'folder-filled',
+  '⭐': 'star-regular-filled',
   '🤖': 'folder-tabs-bot',
-  '👥': 'folder-tabs-group',
-  '👤': 'folder-tabs-user',
-  '✅': 'folder-tabs-chat',
-  '📢': 'folder-tabs-channel',
+  '👥': 'group-filled',
+  '👤': 'user-filled',
+  '✅': 'comments',
+  '📢': 'megaphone-filled',
   '💬': 'folder-tabs-chats',
 };
 

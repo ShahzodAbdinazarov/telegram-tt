@@ -15,7 +15,6 @@ import {
 } from '../../../config';
 import { IS_APP, IS_MAC_OS } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
-import { onDragEnter, onDragLeave } from '../../../util/dragNDropHandlers';
 import { getOrderKey, getPinnedChatsCount } from '../../../util/folderManager';
 import { ARCHIVE_ANIMATION_ID } from './hooks';
 
@@ -83,6 +82,7 @@ const ChatList = ({
     openChat,
     openNextChat,
     closeForumPanel,
+    closeCommunityPanel,
     toggleStoryRibbon,
     openLeftColumnContent,
   } = getActions();
@@ -170,6 +170,7 @@ const ChatList = ({
   const handleArchivedClick = useLastCallback(() => {
     openLeftColumnContent({ contentKey: LeftColumnContent.Archived });
     closeForumPanel();
+    closeCommunityPanel();
   });
 
   const handleShowStoryRibbon = useLastCallback(() => {
@@ -178,18 +179,6 @@ const ChatList = ({
 
   const handleHideStoryRibbon = useLastCallback(() => {
     toggleStoryRibbon({ isShown: false, isArchived });
-  });
-
-  const handleArchivedDragEnter = useLastCallback(() => {
-    onDragEnter(() => {
-      handleArchivedClick();
-    });
-  });
-
-  const handleChatDragEnter = useLastCallback((chatId: string) => {
-    onDragEnter(() => {
-      openChat({ id: chatId, shouldReplaceHistory: true });
-    });
   });
 
   useTopOverscroll({
@@ -225,8 +214,6 @@ const ChatList = ({
           onReorderAnimationEnd={onReorderAnimationEnd}
           offsetTop={offsetTop}
           observeIntersection={observe}
-          onDragEnter={handleChatDragEnter}
-          onDragLeave={onDragLeave}
           withTags={withTags}
           isFoldersSidebarShown={isFoldersSidebarShown}
         />
@@ -251,13 +238,12 @@ const ChatList = ({
       onLoadMore={getMore}
       onScroll={onScroll}
     >
-      {isAllFolder && <ChatListPanes key="panes" onHeightChange={setPanesHeight} />}
+      {!isSaved && <ChatListPanes key="panes" noBanners={!isAllFolder} onHeightChange={setPanesHeight} />}
       {shouldDisplayArchive && (
         <Archive
           key="archive"
           archiveSettings={archiveSettings}
           onClick={handleArchivedClick}
-          onDragEnter={handleArchivedDragEnter}
           animationType={getAnimationType(ARCHIVE_ANIMATION_ID)}
           offsetTop={panesHeight}
           isFoldersSidebarShown={isFoldersSidebarShown}

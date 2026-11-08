@@ -1,4 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
 import {
   memo, useEffect,
   useState,
@@ -14,13 +13,14 @@ import type {
 import type { PollVote } from '../../global/types/tabState';
 
 import { selectTabState } from '../../global/selectors';
-import { formatMediaDateTime } from '../../util/dates/oldDateFormat';
 import { isUserId } from '../../util/entities/ids';
+import {
+  formatCompactTimestamp, formatDateTime, secondsToDate,
+} from '../../util/localization/dateFormat';
 import { renderTextWithEntities } from '../common/helpers/renderTextWithEntities';
 
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 import usePreviousDeprecated from '../../hooks/usePreviousDeprecated';
 
 import GroupChatInfo from '../common/GroupChatInfo';
@@ -48,7 +48,7 @@ type StateProps = {
 const INITIAL_LIMIT = 4;
 const VIEW_MORE_LIMIT = 50;
 
-const PollAnswerResults: FC<OwnProps & StateProps> = ({
+const PollAnswerResults = ({
   chat,
   message,
   answer,
@@ -56,7 +56,7 @@ const PollAnswerResults: FC<OwnProps & StateProps> = ({
   totalVoters,
   votes,
   offset,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     loadPollOptionResults,
     openChat,
@@ -69,7 +69,6 @@ const PollAnswerResults: FC<OwnProps & StateProps> = ({
   const { option, text } = answer;
   const percentage = getPercentage(answerVote.votersCount, totalVoters);
   const lang = useLang();
-  const oldLang = useOldLang();
 
   useEffect(() => {
     // For update when new votes arrive or when the user takes back his vote
@@ -102,8 +101,7 @@ const PollAnswerResults: FC<OwnProps & StateProps> = ({
 
     return answerVote.votersCount > INITIAL_LIMIT && leftVotersCount > 0 && (
       <ShowMoreButton
-        count={leftVotersCount}
-        itemName="voter"
+        text={lang('ShowMoreVoters', { count: leftVotersCount }, { pluralValue: leftVotersCount })}
         isLoading={isLoading}
         onClick={handleViewMoreClick}
       />
@@ -146,8 +144,11 @@ const PollAnswerResults: FC<OwnProps & StateProps> = ({
                     noStatusOrTyping
                   />
                 )}
-                <span className="vote-date">
-                  {formatMediaDateTime(oldLang, date * 1000, true)}
+                <span
+                  className="vote-date"
+                  title={formatDateTime(lang, secondsToDate(date), { date: 'long', time: 'short' })}
+                >
+                  {formatCompactTimestamp(lang, secondsToDate(date), { variant: 'poll', withTime: true })}
                 </span>
               </ListItem>
             ))

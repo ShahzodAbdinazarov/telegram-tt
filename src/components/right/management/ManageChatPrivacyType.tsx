@@ -1,5 +1,3 @@
-import type { ChangeEvent } from 'react';
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useCallback, useEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
@@ -20,7 +18,6 @@ import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 import usePreviousDeprecated from '../../../hooks/usePreviousDeprecated';
 
 import LinkField from '../../common/LinkField';
@@ -61,7 +58,7 @@ type StateProps = {
   privateInviteLink?: string;
 };
 
-const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
+const ManageChatPrivacyType = ({
   chat,
   isActive,
   isChannel,
@@ -77,7 +74,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   maxPublicLinks,
   privateInviteLink,
   onClose,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     updatePublicLink,
     updatePrivateLink,
@@ -87,6 +84,8 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
     openLimitReachedModal,
     resetManagementError,
   } = getActions();
+
+  const lang = useLang();
 
   const firstEditableUsername = useMemo(() => chat.usernames?.find(({ isEditable }) => isEditable), [chat.usernames]);
   const currentUsername = firstEditableUsername?.username || '';
@@ -147,9 +146,9 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
     }
   }, [chat.id, error]);
 
-  const handleOptionChange = useCallback((value: string, e: ChangeEvent<HTMLInputElement>) => {
+  const handleOptionChange = useCallback((value: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const myChats = Object.values(getGlobal().chats.byId)
-      .filter(({ isCreator, usernames }) => isCreator && usernames?.some((c) => c.isActive));
+      .filter(({ isOwner, usernames }) => isOwner && usernames?.some((c) => c.isActive));
 
     if (myChats.length >= maxPublicLinks && value === 'public') {
       openLimitReachedModal({ limit: 'channelsPublic' });
@@ -216,11 +215,6 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
     updatePrivateLink();
   }, [closeRevokeConfirmDialog, updatePrivateLink]);
 
-  const oldLang = useOldLang();
-  const lang = useLang();
-  const langPrefix1 = isChannel ? 'Channel' : 'Mega';
-  const langPrefix2 = isChannel ? 'Channel' : 'Group';
-
   const guardBotUsername = guardBot && getMainUsername(guardBot);
   const guardBotLink = guardBotUsername
     ? <SafeLink url={`${TME_LINK_PREFIX}${guardBotUsername}`} text={`@${guardBotUsername}`} />
@@ -228,16 +222,24 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   const approvalInfo = lang(getApprovalInfoKey(isChannel, Boolean(isPublic)));
 
   const options = [
-    { value: 'private', label: oldLang(`${langPrefix1}Private`), subLabel: oldLang(`${langPrefix1}PrivateInfo`) },
-    { value: 'public', label: oldLang(`${langPrefix1}Public`), subLabel: oldLang(`${langPrefix1}PublicInfo`) },
+    {
+      value: 'private',
+      label: lang(isChannel ? 'ChannelPrivate' : 'MegaPrivate'),
+      subLabel: lang(isChannel ? 'ChannelPrivateInfo' : 'MegaPrivateInfo'),
+    },
+    {
+      value: 'public',
+      label: lang(isChannel ? 'ChannelPublic' : 'MegaPublic'),
+      subLabel: lang(isChannel ? 'ChannelPublicInfo' : 'MegaPublicInfo'),
+    },
   ];
 
   const forwardingOptions = [{
     value: 'allowed',
-    label: oldLang('ChannelVisibility.Forwarding.Enabled'),
+    label: lang('ChannelVisibilityForwardingEnabled'),
   }, {
     value: 'protected',
-    label: oldLang('ChannelVisibility.Forwarding.Disabled'),
+    label: lang('ChannelVisibilityForwardingDisabled'),
   }];
 
   const isLoading = progress === ManagementProgress.InProgress;
@@ -248,12 +250,9 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
 
     return (
       <IslandDescription dir="auto">
-        {(oldLang('lng_username_purchase_available'))
-          .replace('{link}', '%PURCHASE_LINK%')
-          .split('%')
-          .map((s) => {
-            return (s === 'PURCHASE_LINK' ? <SafeLink url={purchaseInfoLink} text={`@${PURCHASE_USERNAME}`} /> : s);
-          })}
+        {lang('UsernamePurchaseAvailable', {
+          link: <SafeLink url={purchaseInfoLink} text={`@${PURCHASE_USERNAME}`} />,
+        }, { withNodes: true, withMarkdown: true })}
       </IslandDescription>
     );
   }
@@ -261,8 +260,8 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
   return (
     <div className="Management">
       <div className="panel-content custom-scroll">
-        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>{oldLang(`${langPrefix2}Type`)}</IslandTitle>
-        <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>{lang(isChannel ? 'ChannelType' : 'GroupType')}</IslandTitle>
+        <Island dir={lang.isRtl ? 'rtl' : undefined}>
           <RadioGroup
             selected={privacyType}
             name="channel-type"
@@ -272,21 +271,21 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
         </Island>
         {privacyType === 'private' ? (
           <>
-            <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
-              {oldLang('InviteLink.InviteLink')}
+            <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+              {lang('InviteLink')}
             </IslandTitle>
-            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <Island dir={lang.isRtl ? 'rtl' : undefined}>
               {privateInviteLink ? (
                 <>
                   <LinkField link={privateInviteLink} className="invite-link" noTitle />
                   <ListItem icon="delete" ripple destructive onClick={openRevokeConfirmDialog}>
-                    {oldLang('RevokeLink')}
+                    {lang('RevokeLink')}
                   </ListItem>
                   <ConfirmDialog
                     isOpen={isRevokeConfirmDialogOpen}
                     onClose={closeRevokeConfirmDialog}
-                    text={oldLang('RevokeAlert')}
-                    confirmLabel={oldLang('RevokeButton')}
+                    text={lang('RevokeAlert')}
+                    confirmLabel={lang('RevokeButton')}
                     confirmHandler={handleRevokePrivateLink}
                     confirmIsDestructive
                   />
@@ -295,8 +294,8 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
                 <Loading />
               )}
             </Island>
-            <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
-              {oldLang(`${langPrefix1}PrivateLinkHelp`)}
+            <IslandDescription dir={lang.isRtl ? 'rtl' : undefined}>
+              {lang(isChannel ? 'ChannelPrivateLinkHelp' : 'MegaPrivateLinkHelp')}
             </IslandDescription>
           </>
         ) : (
@@ -305,6 +304,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
               <div className="settings-input">
                 <UsernameInput
                   asLink
+                  chatId={chat.id}
                   currentUsername={currentUsername}
                   isLoading={isLoading}
                   isUsernameAvailable={isUsernameAvailable}
@@ -315,7 +315,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             </Island>
             {error === USERNAME_PURCHASE_ERROR && renderPurchaseLink()}
             <IslandDescription dir="auto">
-              {oldLang(`${langPrefix2}.Username.CreatePublicLinkHelp`)}
+              {lang(isChannel ? 'ChannelUsernameCreatePublicLinkHelp' : 'GroupUsernameCreatePublicLinkHelp')}
             </IslandDescription>
           </>
         )}
@@ -328,10 +328,10 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
         )}
         {!(isChannel && isPublic) && (
           <>
-            <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
-              {oldLang('MemberRequests')}
+            <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+              {lang('MemberRequests')}
             </IslandTitle>
-            <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <Island dir={lang.isRtl ? 'rtl' : undefined}>
               <SwitchField
                 checked={isJoinRequestEnabled}
                 onChange={handleApproveNewSubscribersChange}
@@ -339,7 +339,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
                 teactExperimentControlled
               />
             </Island>
-            <IslandDescription dir={oldLang.isRtl ? 'rtl' : undefined}>
+            <IslandDescription dir={lang.isRtl ? 'rtl' : undefined}>
               {guardBot
                 ? lang('GuardManagedByDescription', {
                   approvalInfo,
@@ -349,10 +349,10 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
             </IslandDescription>
           </>
         )}
-        <IslandTitle dir={oldLang.isRtl ? 'rtl' : undefined}>
-          {oldLang(isChannel ? 'ChannelVisibility.Forwarding.ChannelTitle' : 'ChannelVisibility.Forwarding.GroupTitle')}
+        <IslandTitle dir={lang.isRtl ? 'rtl' : undefined}>
+          {lang(isChannel ? 'ChannelVisibilityForwardingChannelTitle' : 'ChannelVisibilityForwardingGroupTitle')}
         </IslandTitle>
-        <Island dir={oldLang.isRtl ? 'rtl' : undefined}>
+        <Island dir={lang.isRtl ? 'rtl' : undefined}>
           <RadioGroup
             selected={isProtected ? 'protected' : 'allowed'}
             name="forwarding-type"
@@ -362,14 +362,14 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
         </Island>
         <IslandDescription>
           {isChannel
-            ? oldLang('ChannelVisibility.Forwarding.ChannelInfo')
-            : oldLang('ChannelVisibility.Forwarding.GroupInfo')}
+            ? lang('ChannelVisibilityForwardingChannelInfo')
+            : lang('ChannelVisibilityForwardingGroupInfo')}
         </IslandDescription>
       </div>
       <FloatingActionButton
         isShown={canUpdate}
         disabled={isLoading}
-        ariaLabel={oldLang('Save')}
+        ariaLabel={lang('Save')}
         onClick={handleSave}
         iconName="check"
         isLoading={isLoading}
@@ -377,7 +377,7 @@ const ManageChatPrivacyType: FC<OwnProps & StateProps> = ({
       <ConfirmDialog
         isOpen={isUsernameLostDialogOpen}
         onClose={closeUsernameLostDialog}
-        text={oldLang('ChannelVisibility.Confirm.MakePrivate.Channel', currentUsername)}
+        text={lang('ChannelVisibilityConfirmMakePrivateChannel', { currentUsername })}
         confirmHandler={handleMakeChannelPrivateConfirm}
         confirmIsDestructive
       />

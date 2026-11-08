@@ -37,12 +37,15 @@
   }
 }
 
-.chatExtraBlock {
+.chatExtraBlock,
+.linkedCommunityIsland {
   margin: 1rem;
   margin-bottom: 0;
 
   @include mixins.adapt-margin-to-scrollbar(1rem);
+}
 
+.chatExtraBlock {
   :global(.narrow) {
     margin-bottom: 0;
   }
@@ -53,6 +56,11 @@
       margin-left: 0;
     }
   }
+}
+
+.linkedCommunityAvatar {
+  flex-shrink: 0;
+  margin-inline-end: 0.5rem;
 }
 
 .sharedMediaTabs {
@@ -124,6 +132,7 @@
 }
 
 .sharedMedia {
+  isolation: isolate;
   position: relative;
 
   display: flex;
@@ -142,10 +151,6 @@
     padding: 0;
 
     @include mixins.adapt-margin-to-scrollbar(1rem);
-
-    :global(.ListItem-button) {
-      border-radius: 1rem;
-    }
   }
 
   .sharedMediaIslandContainer {
@@ -235,6 +240,12 @@
     :global(.message-transfer-progress) {
       display: none;
     }
+  }
+
+  &.pollsList {
+    padding: 1rem;
+
+    @include mixins.adapt-padding-to-scrollbar(1rem);
   }
 
   &.audioList,

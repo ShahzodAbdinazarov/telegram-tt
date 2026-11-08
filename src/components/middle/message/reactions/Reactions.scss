@@ -1,5 +1,3 @@
-@use "../../../../styles/mixins";
-
 .Reactions {
   overflow: visible;
   display: flex;
@@ -14,10 +12,6 @@
 
   &.is-outside {
     margin-top: 0.25rem;
-
-    .message-reaction {
-      @include mixins.action-message-bg($noBackground: true);
-    }
   }
 
   .is-forwarded.is-inverted-media & {
@@ -35,9 +29,9 @@
     flex-direction: row-reverse;
   }
 
-  .theme-light &.is-outside .message-reaction {
-    --reaction-background: var(--pattern-color);
-    --reaction-background-hover: var(--pattern-color);
+  &.is-outside .message-reaction {
+    --reaction-background: var(--action-message-bg);
+    --reaction-background-hover: var(--action-message-bg);
     --reaction-background-hover-filter: brightness(115%);
     --reaction-text-color: white;
 

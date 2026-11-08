@@ -2,7 +2,8 @@ import type { ApiChat } from './chats';
 import type { ApiUser } from './users';
 
 export type ApiPrivacyKey = 'phoneNumber' | 'addByPhone' | 'lastSeen' | 'profilePhoto' | 'voiceMessages' |
-  'forwards' | 'chatInvite' | 'phoneCall' | 'phoneP2P' | 'bio' | 'birthday' | 'gifts' | 'noPaidMessages';
+  'forwards' | 'chatInvite' | 'phoneCall' | 'phoneP2P' | 'bio' | 'birthday' | 'gifts' | 'noPaidMessages' |
+  'savedMusic';
 export type PrivacyVisibility = 'everybody' | 'contacts' | 'closeFriends' | 'nonContacts' | 'nobody';
 export type BotsPrivacyType = 'allow' | 'disallow' | 'none';
 
@@ -42,17 +43,6 @@ export interface ApiLanguage {
   translationsUrl: string;
 }
 
-export type ApiOldLangString = string | {
-  zeroValue?: string;
-  oneValue?: string;
-  twoValue?: string;
-  fewValue?: string;
-  manyValue?: string;
-  otherValue?: string;
-};
-
-export type ApiOldLangPack = Record<string, ApiOldLangString | undefined>;
-
 export type LangPack = {
   langCode: string;
   version: number;
@@ -61,6 +51,7 @@ export type LangPack = {
 
 export type CachedLangData = {
   langPack: LangPack;
+  baseLangPack?: LangPack;
   language: ApiLanguage;
 };
 

@@ -1,5 +1,7 @@
 import type { ElementRef, TeactNode } from '../../lib/teact/teact';
-import { memo, useCallback, useRef } from '../../lib/teact/teact';
+import {
+  memo, useCallback, useMemo, useRef,
+} from '../../lib/teact/teact';
 import { getActions } from '../../global';
 
 import type {
@@ -27,13 +29,23 @@ import type {
 } from '../../api/types';
 import type { ObserveFn } from '../../hooks/useIntersectionObserver';
 import type { LangFn } from '../../util/localization';
-import { MediaViewerOrigin, type ThemeKey, type ThreadId } from '../../types';
+import { MAIN_THREAD_ID } from '../../api/types';
+import {
+  MediaViewerOrigin, type PlaybackItemRef, type PlaybackSource, type ThemeKey, type ThreadId,
+} from '../../types';
 
 import { DEBUG, TME_LINK_PREFIX } from '../../config';
+import { getPageBlocksAudios } from '../../global/helpers/buildPageAudioById';
 import { getRichTextPlainText, hasRichText } from '../../global/helpers/richMessage';
+import { selectSharedSettings } from '../../global/selectors/sharedState';
 import { IS_MAC_OS, IS_TOUCH_ENV } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
-import { formatDateTime } from '../../util/localization/dateFormat';
+import { formatDateTime, secondsToDate } from '../../util/localization/dateFormat';
+import {
+  EMPTY_RICH_MEDIA_CAPTION,
+  getRichMediaRef,
+  registerRichMedia,
+} from '../../util/tiptap/richMedia';
 import renderText from '../common/helpers/renderText';
 import {
   getPageMediaBlockMedia,
@@ -43,15 +55,19 @@ import {
   type PageMediaBlock,
 } from './helpers/pageMedia';
 
+import useSelector from '../../hooks/data/useSelector';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useScrollableHint from '../../hooks/useScrollableHint';
 import useUniqueId from '../../hooks/useUniqueId';
 
-import Blockquote from '../common/Blockquote';
 import CodeBlock from '../common/code/CodeBlock';
 import CompactMapPreview from '../common/CompactMapPreview';
 import CompactMediaPreview from '../common/CompactMediaPreview';
+import Document from '../common/Document';
+import PlayableAudio from '../common/PlayableAudio';
+import Blockquote from '../common/quote/Blockquote';
+import Pullquote from '../common/quote/Pullquote';
 import SafeLink from '../common/SafeLink';
 import { Breakout } from '../gili/layout/Surface';
 import Photo from '../middle/message/Photo';
@@ -61,6 +77,7 @@ import Collage from './Collage';
 import EmbedFrame from './EmbedFrame';
 import EmbedPost from './EmbedPost';
 import Latex from './Latex';
+import RichButton from './RichButton';
 import RichText, { getPageAnchorId } from './RichText';
 import Slideshow from './Slideshow';
 import Checkbox from '@gili/primitives/Checkbox';
@@ -76,8 +93,11 @@ type OwnProps = {
   noAvatars?: boolean;
   canAutoLoadMedia?: boolean;
   isProtected?: boolean;
+  noPlaylist?: boolean;
   theme: ThemeKey;
+  fontSizeAdjust?: number;
   pageUrl?: string;
+  webPageId?: string;
   chatId?: string;
   messageId?: number;
   threadId?: ThreadId;
@@ -85,6 +105,7 @@ type OwnProps = {
   observeIntersectionForPlaying?: ObserveFn;
   sharedCanvasRef?: ElementRef<HTMLCanvasElement>;
   sharedCanvasHqRef?: ElementRef<HTMLCanvasElement>;
+  onTelegramChannelClick?: (channelUsername: string) => void;
 };
 
 type RichTextContext = {
@@ -94,6 +115,7 @@ type RichTextContext = {
   chatId?: string;
   messageId?: number;
   threadId?: ThreadId;
+  isProtected?: boolean;
   observeIntersectionForLoading?: ObserveFn;
   observeIntersectionForPlaying?: ObserveFn;
   sharedCanvasRef?: ElementRef<HTMLCanvasElement>;
@@ -101,6 +123,7 @@ type RichTextContext = {
 };
 
 const RELATED_ARTICLE_PHOTO_SIZE = 48;
+const SINGLE_SOURCE: PlaybackSource = { type: 'single' };
 const MAP_FALLBACK_WIDTH = 480;
 const MAP_FALLBACK_HEIGHT = 360;
 
@@ -111,8 +134,11 @@ const RichContent = ({
   noAvatars,
   canAutoLoadMedia,
   isProtected,
+  noPlaylist,
   theme,
+  fontSizeAdjust,
   pageUrl,
+  webPageId,
   chatId,
   messageId,
   threadId,
@@ -120,15 +146,42 @@ const RichContent = ({
   observeIntersectionForPlaying,
   sharedCanvasRef,
   sharedCanvasHqRef,
+  onTelegramChannelClick,
 }: OwnProps) => {
   const {
     openMapModal, openMediaViewer, openUrl,
   } = getActions();
 
   const lang = useLang();
+  const { shouldWarnAboutFiles } = useSelector(selectSharedSettings);
   const containerId = useUniqueId();
   const unsupportedText = lang('PageContentUnsupported');
   const embedTitle = lang('PageContentEmbed');
+  const style = fontSizeAdjust !== undefined ? `--iv-font-size-scale: ${fontSizeAdjust}` : undefined;
+  const isMessageContent = messageId !== undefined;
+
+  const richMessageSource = useMemo<PlaybackSource | undefined>(() => (
+    chatId !== undefined && messageId !== undefined && !noPlaylist
+      ? {
+        type: 'richMessage', chatId, threadId: threadId ?? MAIN_THREAD_ID, messageId,
+      }
+      : undefined
+  ), [chatId, messageId, threadId, noPlaylist]);
+
+  const audioItemsById = useMemo(() => {
+    const itemsById = new Map<string, PlaybackItemRef>();
+    getPageBlocksAudios(blocks).forEach(({ id: documentId }) => {
+      if (chatId !== undefined && messageId !== undefined) {
+        itemsById.set(documentId, {
+          type: 'message', chatId, threadId: threadId ?? MAIN_THREAD_ID, messageId, documentId,
+        });
+      } else if (webPageId) {
+        itemsById.set(documentId, { type: 'instantView', webPageId, documentId });
+      }
+    });
+
+    return itemsById;
+  }, [blocks, chatId, messageId, threadId, webPageId]);
 
   const richTextContext: RichTextContext = {
     unsupportedText,
@@ -137,6 +190,7 @@ const RichContent = ({
     chatId,
     messageId,
     threadId,
+    isProtected,
     observeIntersectionForLoading,
     observeIntersectionForPlaying,
     sharedCanvasRef,
@@ -144,7 +198,7 @@ const RichContent = ({
   };
 
   const formatPublishedDate = useCallback((date: number) => {
-    return formatDateTime(lang, new Date(date * 1000), { date: 'long' });
+    return formatDateTime(lang, secondsToDate(date), { date: 'long' });
   }, [lang]);
 
   const handleOpenMap = useLastCallback((geoPoint: ApiGeoPoint, zoom: number) => {
@@ -193,6 +247,7 @@ const RichContent = ({
     observeIntersectionForLoading,
     observeIntersectionForPlaying,
     lang,
+    onTelegramChannelClick,
   };
   function renderTopLevelBlock(block: ApiPageBlock, index: number) {
     const sourceKey = String(index);
@@ -203,7 +258,7 @@ const RichContent = ({
     }
 
     return (
-      <Breakout className={styles.mediaBreakout}>
+      <Breakout className={buildClassName(styles.mediaBreakout, isMessageContent && styles.paddedCaption)}>
         {content}
       </Breakout>
     );
@@ -211,37 +266,64 @@ const RichContent = ({
 
   function renderBlock(block: ApiPageBlock, sourceKey: string, shouldBreakoutMedia = false): TeactNode {
     switch (block.type) {
+      case 'buttonRow':
+        return (
+          <div
+            className={buildClassName(
+              styles.buttonRow,
+              block.align === 'left' && styles.buttonsLeft,
+              block.align === 'center' && styles.buttonsCenter,
+              block.align === 'right' && styles.buttonsRight,
+            )}
+            data-rich-button-row={block.align || ''}
+          >
+            {block.buttons.map((button) => (
+              <RichButton button={button} {...richTextContext} />
+            ))}
+          </div>
+        );
       case 'title':
-        return renderTextBlock(block.text, styles.title, renderContext);
+        return renderTextBlock(block.text, styles.title, renderContext, block.type);
       case 'subtitle':
-        return renderTextBlock(block.text, styles.subtitle, renderContext);
+        return renderTextBlock(block.text, styles.subtitle, renderContext, block.type);
       case 'kicker':
         return renderTextBlock(block.text, styles.kicker, renderContext);
-      case 'authorDate':
+      case 'authorDate': {
+        const hasAuthor = hasRichText(block.author);
+        const publishedDate = block.publishedDate
+          ? formatDateTime(lang, secondsToDate(block.publishedDate), { date: 'long', time: 'short' })
+          : undefined;
+
         return (
           <p className={styles.authorDate}>
-            <RichText text={block.author} {...richTextContext} />
-            {block.publishedDate
-              ? ` ${formatDateTime(lang, new Date(block.publishedDate * 1000), { date: 'long' })}`
-              : undefined}
+            {hasAuthor && <RichText text={block.author} {...richTextContext} />}
+            {hasAuthor && publishedDate && (
+              <>
+                {' '}
+                &bull;
+                {' '}
+              </>
+            )}
+            {publishedDate}
           </p>
         );
+      }
       case 'header':
       case 'heading1':
-        return renderTextBlock(block.text, styles.heading1, renderContext);
+        return renderTextBlock(block.text, styles.heading1, renderContext, block.type);
       case 'subheader':
       case 'heading2':
-        return renderTextBlock(block.text, styles.heading2, renderContext);
+        return renderTextBlock(block.text, styles.heading2, renderContext, block.type);
       case 'heading3':
-        return renderTextBlock(block.text, styles.heading3, renderContext);
+        return renderTextBlock(block.text, styles.heading3, renderContext, block.type);
       case 'heading4':
       case 'heading5':
       case 'heading6':
-        return renderTextBlock(block.text, styles.heading4, renderContext);
+        return renderTextBlock(block.text, styles.heading4, renderContext, block.type);
       case 'paragraph':
-        return renderTextBlock(block.text, styles.paragraph, renderContext);
+        return renderTextBlock(block.text, styles.paragraph, renderContext, block.type);
       case 'footer':
-        return renderTextBlock(block.text, styles.footer, renderContext);
+        return renderTextBlock(block.text, styles.footer, renderContext, block.type);
       case 'preformatted':
         return (
           <CodeBlock
@@ -293,7 +375,7 @@ const RichContent = ({
         return renderPullquoteBlock(block, renderContext);
       case 'cover':
         return (
-          <Breakout className={buildClassName(styles.mediaBreakout, styles.cover)}>
+          <Breakout className={buildClassName(styles.mediaBreakout, styles.paddedCaption, styles.cover)}>
             {renderBlock(block.cover, `${sourceKey}-cover`, true)}
           </Breakout>
         );
@@ -326,7 +408,13 @@ const RichContent = ({
       case 'slideshow':
         return renderSlideshowBlock(block, renderContext, sourceKey, shouldBreakoutMedia, handleOpenMedia);
       case 'channel':
-        return <ChannelBlock channelUsername={block.channelUsername} title={block.title} />;
+        return (
+          <ChannelBlock
+            channelUsername={block.channelUsername}
+            title={block.title}
+            onTelegramChannelClick={renderContext.onTelegramChannelClick}
+          />
+        );
       case 'embedPost':
         return (
           <EmbedPost
@@ -337,14 +425,52 @@ const RichContent = ({
             renderBlock={renderBlock}
           />
         );
-      case 'audio':
+      case 'document':
+        return (
+          <figure className={styles.figure} data-tg-rich-media={buildRichMediaCopyData(block)}>
+            <div data-rich-copy-ignore>
+              <Document
+                document={block.document}
+                noDownload={isProtected}
+                observeIntersection={observeIntersectionForLoading}
+                shouldWarnAboutFiles={shouldWarnAboutFiles}
+              />
+            </div>
+            {renderCaption(block.caption, renderContext)}
+          </figure>
+        );
+      case 'audio': {
+        const item = audioItemsById.get(block.audio.id);
+        if (!item) return renderUnsupportedBlock(unsupportedText, block.type);
+        return (
+          <figure className={styles.figure} data-tg-rich-media={buildRichMediaCopyData(block)}>
+            <div data-rich-copy-ignore>
+              <PlayableAudio
+                audio={block.audio}
+                item={item}
+                source={richMessageSource || SINGLE_SOURCE}
+                variant="inline"
+                isOwn={isOwn}
+                canDownload={!isProtected}
+              />
+            </div>
+            {renderCaption(block.caption, renderContext)}
+          </figure>
+        );
+      }
       case 'unsupported':
         return renderUnsupportedBlock(unsupportedText, block.type);
     }
   }
 
   return (
-    <div id={containerId} className={styles.richContent} dir={isRtl ? 'rtl' : 'auto'}>
+    <div
+      id={containerId}
+      className={styles.richContent}
+      style={style}
+      dir={isRtl ? 'rtl' : 'auto'}
+      data-rich-copy-root
+    >
       {blocks.map(renderTopLevelBlock)}
     </div>
   );
@@ -374,6 +500,7 @@ type RenderBlockContext = {
   observeIntersectionForLoading?: ObserveFn;
   observeIntersectionForPlaying?: ObserveFn;
   lang: LangFn;
+  onTelegramChannelClick?: (channelUsername: string) => void;
 };
 
 type RenderBlockFn = (block: ApiPageBlock, sourceKey: string) => TeactNode;
@@ -408,17 +535,25 @@ function TableBlock({
   return (
     <div
       ref={ref}
+      data-rich-block-type="table"
       className={buildClassName(styles.tableWrapper, 'custom-scroll-x', SHOULD_HIDE_SCROLLBARS && 'no-scrollbar')}
     >
-      {hasRichText(block.title) && renderTextBlock(block.title, styles.tableTitle, renderContext)}
-      <table className={buildClassName(styles.table, block.isBordered && styles.bordered)}>
+      {hasRichText(block.title) && renderTextBlock(
+        block.title, styles.tableTitle, renderContext, 'tableTitle',
+      )}
+      <table
+        className={buildClassName(styles.table, block.isBordered && styles.bordered, block.isCompact && styles.compact)}
+        data-bordered={String(Boolean(block.isBordered))}
+        data-striped={String(Boolean(block.isStriped))}
+        data-compact={String(Boolean(block.isCompact))}
+      >
         <tbody>
           {block.rows.map((row, rowIndex) => {
             const isFirstRow = rowIndex === 0;
             const isLastRow = rowIndex === block.rows.length - 1;
 
             return (
-              <tr className={block.isStriped && rowIndex % 2 ? styles.stripedRow : undefined}>
+              <tr className={block.isStriped && rowIndex % 2 === 0 ? styles.stripedRow : undefined}>
                 {row.cells.map((cell, cellIndex) => renderTableCell(
                   cell,
                   renderContext,
@@ -446,6 +581,8 @@ function MathBlock({ source }: { source: string }) {
   return (
     <div
       ref={ref}
+      data-rich-block-type="math"
+      data-source={source}
       className={buildClassName(
         styles.block, styles.latexBlockWrapper, 'custom-scroll-x', SHOULD_HIDE_SCROLLBARS && 'no-scrollbar',
       )}
@@ -465,21 +602,17 @@ function renderVideoBlock(
   const sourceId = getPageMediaSourceId(context.richTextContext.containerId, sourceKey, block);
 
   return (
-    <figure className={styles.figure}>
+    <figure className={styles.figure} data-tg-rich-media={buildRichMediaCopyData(block)}>
       <Video
         id={sourceId}
         video={getPageMediaBlockMedia(block)}
-        isOwn={context.isOwn}
-        noAvatars={context.noAvatars}
         canAutoLoad={context.canAutoLoadMedia}
         canAutoPlay={block.isAutoplay && context.canAutoLoadMedia}
         isProtected={context.isProtected}
         observeIntersectionForLoading={context.observeIntersectionForLoading}
         observeIntersectionForPlaying={context.observeIntersectionForPlaying}
-        isNestedMedia
         className={buildClassName(
           styles.mediaBlock,
-          shouldBreakoutMedia && styles.fullWidthMediaBlock,
           shouldBreakoutMedia && styles.noBorderRadius,
         )}
         onClick={() => onOpenMedia([block], [sourceId], 0)}
@@ -504,20 +637,16 @@ function renderPhotoBlock(
   const sourceId = getPageMediaSourceId(context.richTextContext.containerId, sourceKey, block);
 
   return (
-    <figure className={styles.figure}>
+    <figure className={styles.figure} data-tg-rich-media={buildRichMediaCopyData(block)}>
       <Photo
         id={sourceId}
         photo={getPageMediaBlockMedia(block)}
-        isOwn={context.isOwn}
-        noAvatars={context.noAvatars}
         canAutoLoad={context.canAutoLoadMedia}
         isProtected={context.isProtected}
         theme={context.theme}
         observeIntersection={context.observeIntersectionForLoading}
-        isNestedMedia
         className={buildClassName(
           styles.mediaBlock,
-          shouldBreakoutMedia && styles.fullWidthMediaBlock,
           shouldBreakoutMedia && styles.noBorderRadius,
         )}
         onClick={() => {
@@ -546,12 +675,10 @@ function renderSlideshowBlock(
   const sourceIds = getPageMediaSourceIds(context.richTextContext.containerId, sourceKey, items);
 
   return (
-    <figure className={styles.figure}>
+    <figure className={styles.figure} data-tg-rich-media={buildRichMediaCopyData(block)}>
       <Slideshow
         items={items}
         sourceIds={sourceIds}
-        isOwn={context.isOwn}
-        noAvatars={context.noAvatars}
         canAutoLoadMedia={context.canAutoLoadMedia}
         isProtected={context.isProtected}
         theme={context.theme}
@@ -561,7 +688,7 @@ function renderSlideshowBlock(
         onMediaClick={(index) => onOpenMedia(items, sourceIds, index)}
         renderCaption={(caption) => renderCaption(caption, context)}
       />
-      {renderCaption(block.caption, context)}
+      {renderCaption(block.caption, context, true)}
     </figure>
   );
 }
@@ -581,12 +708,10 @@ function renderCollageBlock(
   const sourceIds = getPageMediaSourceIds(context.richTextContext.containerId, sourceKey, items);
 
   return (
-    <figure className={styles.figure}>
+    <figure className={styles.figure} data-tg-rich-media={buildRichMediaCopyData(block)}>
       <Collage
         items={items}
         sourceIds={sourceIds}
-        isOwn={context.isOwn}
-        noAvatars={context.noAvatars}
         canAutoLoadMedia={context.canAutoLoadMedia}
         isProtected={context.isProtected}
         theme={context.theme}
@@ -667,13 +792,14 @@ function renderTextBlock(
   text: ApiRichText,
   className: string,
   context: RenderBlockContext,
+  blockType?: ApiPageBlock['type'] | 'tableTitle',
 ) {
-  if (!hasRichText(text)) {
+  if (blockType !== 'paragraph' && !hasRichText(text)) {
     return undefined;
   }
 
   return (
-    <p className={buildClassName(styles.block, className)}>
+    <p className={buildClassName(styles.block, className)} data-rich-block-type={blockType}>
       <RichText text={text} {...context.richTextContext} />
     </p>
   );
@@ -684,10 +810,10 @@ function renderQuoteBlock(
   context: RenderBlockContext,
 ) {
   return (
-    <Blockquote className={styles.block}>
+    <Blockquote className={styles.block} contentClassName={styles.blockquote} canBeCollapsible={block.canCollapse}>
       <RichText text={block.text} {...context.richTextContext} />
       {hasRichText(block.caption) && (
-        <footer className={styles.quoteCaption}>
+        <footer className={styles.quoteCaption} data-rich-block-type="quoteCaption">
           <RichText text={block.caption} {...context.richTextContext} />
         </footer>
       )}
@@ -700,14 +826,17 @@ function renderPullquoteBlock(
   context: RenderBlockContext,
 ) {
   return (
-    <aside className={buildClassName(styles.block, styles.pullquote)}>
+    <Pullquote className={buildClassName(styles.block, styles.pullquote)}>
       <RichText text={block.text} {...context.richTextContext} />
       {hasRichText(block.caption) && (
-        <footer className={buildClassName(styles.quoteCaption, styles.pullquoteCaption)}>
+        <footer
+          className={buildClassName(styles.quoteCaption, styles.pullquoteCaption)}
+          data-rich-block-type="quoteCaption"
+        >
           <RichText text={block.caption} {...context.richTextContext} />
         </footer>
       )}
-    </aside>
+    </Pullquote>
   );
 }
 
@@ -718,10 +847,10 @@ function renderBlockquoteBlocks(
   renderBlock: RenderBlockFn,
 ) {
   return (
-    <Blockquote className={styles.block}>
+    <Blockquote className={styles.block} contentClassName={styles.blockquote}>
       {block.blocks.map((nestedBlock, index) => renderBlock(nestedBlock, `${sourceKey}-quote-${index}`))}
       {hasRichText(block.caption) && (
-        <footer className={styles.quoteCaption}>
+        <footer className={styles.quoteCaption} data-rich-block-type="quoteCaption">
           <RichText text={block.caption} {...context.richTextContext} />
         </footer>
       )}
@@ -740,7 +869,7 @@ function renderDetailsBlock(
       <summary className={styles.detailsSummary}>
         <RichText text={block.title} {...context.richTextContext} />
       </summary>
-      <div className={styles.detailsContent}>
+      <div className={styles.detailsContent} data-rich-block-type="detailsContent">
         {block.blocks.map((nestedBlock, index) => (
           renderBlock(nestedBlock, `${sourceKey}-details-${index}`)
         ))}
@@ -769,6 +898,7 @@ function renderMapBlock(
         height={block.height || MAP_FALLBACK_HEIGHT}
         zoom={block.zoom}
         shouldShowPin
+        isFullWidth
         onClick={() => onOpenMap(geo, block.zoom)}
       />
       {renderCaption(block.caption, context)}
@@ -799,13 +929,14 @@ function renderListItem(
   renderBlock: RenderBlockFn,
 ) {
   return (
-    <li className={styles.listItem}>
-      {renderCheckbox(item.isCheckbox, item.isChecked)}
-      {item.type === 'text' ? (
-        <RichText text={item.text} {...context.richTextContext} />
-      ) : (
-        item.blocks.map((block, index) => renderBlock(block, `${sourceKey}-${index}`))
-      )}
+    <li
+      className={styles.listItem}
+      data-checkbox={item.isCheckbox ? 'true' : undefined}
+      data-checked={item.isChecked ? 'true' : undefined}
+    >
+      <div className={styles.unorderedListContent} data-rich-copy-wrapper>
+        {renderListItemContent(item, context, sourceKey, renderBlock)}
+      </div>
     </li>
   );
 }
@@ -819,15 +950,12 @@ function renderNativeOrderedListItem(
   return (
     <li
       className={styles.listItem}
+      data-checkbox={item.isCheckbox ? 'true' : undefined}
+      data-checked={item.isChecked ? 'true' : undefined}
       value={item.value}
       type={item.orderType}
     >
-      {renderCheckbox(item.isCheckbox, item.isChecked)}
-      {item.type === 'text' ? (
-        <RichText text={item.text} {...context.richTextContext} />
-      ) : (
-        item.blocks.map((block, index) => renderBlock(block, `${sourceKey}-${index}`))
-      )}
+      {renderListItemContent(item, context, sourceKey, renderBlock)}
     </li>
   );
 }
@@ -839,17 +967,40 @@ function renderOrderedListItem(
   renderBlock: RenderBlockFn,
 ) {
   return (
-    <li className={buildClassName(styles.listItem, styles.orderedListItem)}>
-      <span className={styles.orderedListMarker}>{`${item.num}.`}</span>
-      <span className={styles.orderedListContent}>
-        {renderCheckbox(item.isCheckbox, item.isChecked)}
-        {item.type === 'text' ? (
-          <RichText text={item.text} {...context.richTextContext} />
-        ) : (
-          item.blocks.map((block, index) => renderBlock(block, `${sourceKey}-${index}`))
-        )}
-      </span>
+    <li
+      className={buildClassName(styles.listItem, styles.orderedListItem)}
+      data-checkbox={item.isCheckbox ? 'true' : undefined}
+      data-checked={item.isChecked ? 'true' : undefined}
+    >
+      <span className={styles.orderedListMarker} data-rich-copy-ignore>{`${item.num}.`}</span>
+      <div className={styles.orderedListContent} data-rich-copy-wrapper>
+        {renderListItemContent(item, context, sourceKey, renderBlock)}
+      </div>
     </li>
+  );
+}
+
+function renderListItemContent(
+  item: ApiPageListItem | ApiPageListOrderedItem,
+  context: RenderBlockContext,
+  sourceKey: string,
+  renderBlock: RenderBlockFn,
+) {
+  const content = item.type === 'text' ? (
+    <RichText text={item.text} {...context.richTextContext} />
+  ) : (
+    item.blocks.map((block, index) => renderBlock(block, `${sourceKey}-${index}`))
+  );
+
+  if (!item.isCheckbox) {
+    return content;
+  }
+
+  return (
+    <div className={styles.checkboxListItem} data-rich-copy-wrapper>
+      <span data-rich-copy-ignore>{renderCheckbox(item.isChecked)}</span>
+      <div className={styles.listItemContent} data-rich-copy-wrapper>{content}</div>
+    </div>
   );
 }
 
@@ -866,11 +1017,7 @@ function getOrderedListType(orderType?: string) {
   }
 }
 
-function renderCheckbox(isCheckbox?: true, isChecked?: true) {
-  if (!isCheckbox) {
-    return undefined;
-  }
-
+function renderCheckbox(isChecked?: true) {
   return (
     <span className={styles.checkboxWrapper}>
       <Checkbox checked={isChecked} nonInteractive />
@@ -910,7 +1057,7 @@ function renderTableCell(
   );
 }
 
-function renderCaption(caption: ApiPageCaption, context: RenderBlockContext) {
+function renderCaption(caption: ApiPageCaption, context: RenderBlockContext, isSharedCaption?: boolean) {
   const hasText = hasRichText(caption.text);
   const hasCredit = hasRichText(caption.credit);
   if (!hasText && !hasCredit) {
@@ -918,10 +1065,14 @@ function renderCaption(caption: ApiPageCaption, context: RenderBlockContext) {
   }
 
   return (
-    <figcaption className={styles.caption}>
+    <figcaption
+      className={styles.caption}
+      data-rich-block-type="mediaCaption"
+      data-rich-media-block-caption={isSharedCaption}
+    >
       {hasText && <RichText text={caption.text} {...context.richTextContext} />}
       {hasCredit && (
-        <span className={styles.credit}>
+        <span className={styles.credit} data-rich-block-type="mediaCredit">
           <RichText text={caption.credit} {...context.richTextContext} />
         </span>
       )}
@@ -929,9 +1080,38 @@ function renderCaption(caption: ApiPageCaption, context: RenderBlockContext) {
   );
 }
 
+function buildRichMediaCopyData(
+  block: Extract<ApiPageBlock, { type: 'photo' | 'video' | 'audio' | 'document' | 'collage' | 'slideshow' }>,
+) {
+  const isGroup = block.type === 'collage' || block.type === 'slideshow';
+  const mediaBlocks = isGroup
+    ? getPageMediaBlocks(block.items)
+    : [block];
+  const items = mediaBlocks.map((item) => {
+    const media = item.type === 'document' ? item.document
+      : item.type === 'audio' ? item.audio : getPageMediaBlockMedia(item);
+    registerRichMedia(media);
+    return {
+      type: item.type,
+      ref: getRichMediaRef(item.type, media.id!),
+      caption: isGroup ? item.caption : EMPTY_RICH_MEDIA_CAPTION,
+      isSpoiler: item.type === 'photo' || item.type === 'video' ? item.isSpoiler : undefined,
+      url: item.type === 'photo' ? item.url : undefined,
+      webPageId: item.type === 'photo' ? item.webPageId : undefined,
+      isAutoplay: item.type === 'video' ? item.isAutoplay : undefined,
+      isLoop: item.type === 'video' ? item.isLoop : undefined,
+    };
+  });
+  return JSON.stringify({
+    kind: block.type,
+    items,
+    credit: block.caption.credit,
+  });
+}
+
 function renderUnsupportedBlock(unsupportedText: string, blockType?: ApiPageBlock['type']) {
   return (
-    <p className={styles.unsupported}>
+    <p className={styles.unsupported} data-rich-copy-ignore>
       {unsupportedText}
       {DEBUG && blockType && `: ${blockType}`}
     </p>
@@ -941,18 +1121,24 @@ function renderUnsupportedBlock(unsupportedText: string, blockType?: ApiPageBloc
 type ChannelBlockOwnProps = {
   channelUsername: string;
   title: string;
+  onTelegramChannelClick?: (channelUsername: string) => void;
 };
 
 const ChannelBlock = ({
   channelUsername,
   title,
+  onTelegramChannelClick,
 }: ChannelBlockOwnProps) => {
-  const { openTelegramLink, closeInstantView } = getActions();
+  const { openTelegramLink } = getActions();
   const lang = useLang();
   const url = `${TME_LINK_PREFIX}${channelUsername}`;
 
   const handleClick = useLastCallback(() => {
-    closeInstantView();
+    if (onTelegramChannelClick) {
+      onTelegramChannelClick(channelUsername);
+      return;
+    }
+
     openTelegramLink({ url });
   });
 

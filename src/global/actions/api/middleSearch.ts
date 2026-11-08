@@ -6,15 +6,22 @@ import { type ApiPeer, MAIN_THREAD_ID } from '../../../api/types';
 import { LoadMoreDirection } from '../../../types';
 
 import {
-  CHAT_MEDIA_SLICE, MESSAGE_SEARCH_SLICE, SHARED_MEDIA_SLICE,
+  CHAT_MEDIA_SLICE,
+  MEDIA_PRELOAD_OFFSET,
+  MESSAGE_SEARCH_SLICE,
+  PLAYLIST_NEWEST_ANCHOR_ID,
+  PLAYLIST_OLDEST_ANCHOR_ID,
+  SHARED_MEDIA_SLICE,
 } from '../../../config';
+import { tryParseDeepLink } from '../../../util/deepLinkParser';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { buildCollectionByKey, isInsideSortedArrayRange } from '../../../util/iteratees';
 import { getSearchResultKey } from '../../../util/keys/searchResultKey';
 import { callApi } from '../../../api/gramjs';
 import { getIsSavedDialog, getMessageContentIds, isSameReaction } from '../../helpers';
+import { isApiPeerChat } from '../../helpers/peers';
 import {
-  addActionHandler, getGlobal, setGlobal,
+  addActionHandler, getActions, getGlobal, setGlobal,
 } from '../../index';
 import {
   addChatMessagesById,
@@ -23,6 +30,7 @@ import {
   initializeChatMediaSearchResults,
   mergeWithChatMediaSearchSegment,
   setChatMediaSearchLoading,
+  updateChatMediaSearchPendingRequest,
   updateChatMediaSearchResults,
   updateMiddleSearch,
   updateMiddleSearchResults,
@@ -30,14 +38,16 @@ import {
 } from '../../reducers';
 import {
   selectChat,
-  selectCurrentChatMediaSearch,
+  selectChatByUsername,
+  selectChatMediaSearch,
+  selectChatMessage,
   selectCurrentMessageList,
   selectCurrentMiddleSearch,
   selectCurrentSharedMediaSearch,
   selectPeer,
 } from '../../selectors';
-
-const MEDIA_PRELOAD_OFFSET = 9;
+import { selectPlaybackSource } from '../../selectors/audioPlayer';
+import { selectThreadIdFromMessage } from '../../selectors/threads';
 
 addActionHandler('performMiddleSearch', async (global, actions, payload): Promise<void> => {
   const {
@@ -101,6 +111,26 @@ addActionHandler('performMiddleSearch', async (global, actions, payload): Promis
       savedTag,
       fromPeer,
     });
+
+    if (result && query && !isHashtag && !isSavedDialog && isApiPeerChat(peer)) {
+      global = getGlobal();
+      const link = tryParseDeepLink(query.trim());
+      if ((link?.type === 'privateMessageLink' && link.channelId === peer.id)
+        || (link?.type === 'publicMessageLink' && selectChatByUsername(global, link.username)?.id === peer.id)) {
+        let message = selectChatMessage(global, peer.id, link.messageId);
+        if (!message) {
+          const messageResult = await callApi('fetchMessage', { chat: peer, messageId: link.messageId });
+          message = messageResult !== 'MESSAGE_DELETED' ? messageResult?.message : undefined;
+        }
+
+        global = getGlobal();
+        result.messages = message && (!fromPeerId || message.senderId === fromPeerId)
+          && (threadId === MAIN_THREAD_ID || selectThreadIdFromMessage(global, message) === threadId)
+          ? [message] : [];
+        result.totalCount = result.messages.length;
+        result.nextOffsetId = undefined;
+      }
+    }
   }
 
   if (type === 'myChats') {
@@ -211,7 +241,8 @@ addActionHandler('searchSharedMediaMessages', (global, actions, payload): Action
 });
 addActionHandler('searchChatMediaMessages', (global, actions, payload): ActionReturnType => {
   const {
-    chatId, threadId, currentMediaMessageId, limit, direction, tabId = getCurrentTabId(),
+    chatId, threadId, currentMediaMessageId, limit, direction, mediaType = 'media',
+    tabId = getCurrentTabId(),
   } = payload;
   if (!chatId || !threadId || !currentMediaMessageId) {
     return;
@@ -224,12 +255,12 @@ addActionHandler('searchChatMediaMessages', (global, actions, payload): ActionRe
   if (!chat) {
     return;
   }
-  let currentSearch = selectCurrentChatMediaSearch(global, tabId);
+  let currentSearch = selectChatMediaSearch(global, chatId, threadId, mediaType, tabId);
 
   if (!currentSearch) {
-    global = initializeChatMediaSearchResults(global, chatId, threadId, tabId);
+    global = initializeChatMediaSearchResults(global, chatId, threadId, mediaType, tabId);
     setGlobal(global);
-    currentSearch = selectCurrentChatMediaSearch(global, tabId);
+    currentSearch = selectChatMediaSearch(global, chatId, threadId, mediaType, tabId);
     if (!currentSearch) {
       return;
     }
@@ -238,7 +269,9 @@ addActionHandler('searchChatMediaMessages', (global, actions, payload): ActionRe
 
   void searchChatMedia(global,
     chat,
+    chatId,
     threadId,
+    mediaType,
     currentMediaMessageId,
     currentSearch,
     direction,
@@ -327,26 +360,15 @@ async function searchSharedMedia<T extends GlobalState>(
   }
 }
 
-function selectCurrentChatMediaSearchSegment(
+function findChatMediaSearchSegment(
   params: ChatMediaSearchParams,
   currentMediaMessageId: number,
 ): ChatMediaSearchSegment | undefined {
   if (isInsideSortedArrayRange(currentMediaMessageId, params.currentSegment.foundIds)) {
     return params.currentSegment;
   }
-  const index = params.segments.findIndex(
-    (segment) => isInsideSortedArrayRange(currentMediaMessageId, segment.foundIds),
-  );
 
-  if (index === -1) {
-    if (params.currentSegment && params.currentSegment.foundIds.length) {
-      params.segments.push(params.currentSegment);
-    }
-    return undefined;
-  }
-  const result = params.segments.splice(index, 1)[0];
-  params.segments.push(params.currentSegment);
-  return result;
+  return params.segments.find((segment) => isInsideSortedArrayRange(currentMediaMessageId, segment.foundIds));
 }
 
 function calcChatMediaSearchAddOffset(
@@ -421,7 +443,9 @@ function calcLoadingState(
 async function searchChatMedia<T extends GlobalState>(
   global: T,
   peer: ApiPeer,
+  sourceChatId: string,
   threadId: ThreadId,
+  mediaType: SharedMediaType,
   currentMediaMessageId: number,
   chatMediaSearchParams: ChatMediaSearchParams,
   direction?: LoadMoreDirection,
@@ -430,30 +454,64 @@ async function searchChatMedia<T extends GlobalState>(
   ...[tabId = getCurrentTabId()]: TabArgs<T>
 ) {
   const { isSynced } = global;
-  if (!isSynced || chatMediaSearchParams.isLoading) {
+  if (!isSynced) {
+    settlePlayerStepForSearch(sourceChatId, threadId, mediaType, tabId, false);
     return;
   }
-  let currentSegment = selectCurrentChatMediaSearchSegment(chatMediaSearchParams, currentMediaMessageId);
+
+  const resultChatId = isSavedDialog ? global.currentUserId! : peer.id;
+
+  if (chatMediaSearchParams.isLoading) {
+    global = updateChatMediaSearchPendingRequest(
+      global, resultChatId, threadId, mediaType, { currentMediaMessageId, direction }, tabId,
+    );
+    setGlobal(global);
+    return;
+  }
+
+  let currentSegment = findChatMediaSearchSegment(chatMediaSearchParams, currentMediaMessageId);
+
+  if (currentSegment && currentSegment !== chatMediaSearchParams.currentSegment) {
+    global = updateChatMediaSearchResults(
+      global, resultChatId, threadId, mediaType, currentSegment, chatMediaSearchParams, tabId,
+    );
+    setGlobal(global);
+    global = getGlobal();
+    chatMediaSearchParams = selectChatMediaSearch(global, resultChatId, threadId, mediaType, tabId)!;
+    currentSegment = chatMediaSearchParams.currentSegment;
+  }
+
+  const isEdgeAnchor = currentMediaMessageId === PLAYLIST_OLDEST_ANCHOR_ID
+    || currentMediaMessageId === PLAYLIST_NEWEST_ANCHOR_ID;
 
   if (direction === undefined) {
     direction = calcLoadMoreDirection(currentMediaMessageId, currentSegment);
+  } else if (!currentSegment && !isEdgeAnchor) {
+    direction = LoadMoreDirection.Around;
   }
 
   if (direction === undefined) {
+    settlePlayerStepForSearch(sourceChatId, threadId, mediaType, tabId, false);
+    return;
+  }
+
+  if (currentSegment && (
+    (direction === LoadMoreDirection.Backwards && currentSegment.loadingState.areAllItemsLoadedBackwards)
+    || (direction === LoadMoreDirection.Forwards && currentSegment.loadingState.areAllItemsLoadedForwards)
+  )) {
+    settlePlayerStepForSearch(sourceChatId, threadId, mediaType, tabId, false);
     return;
   }
 
   const offsetId = calcChatMediaSearchOffsetId(direction, currentMediaMessageId, currentSegment);
   const addOffset = calcChatMediaSearchAddOffset(direction, limit);
 
-  const resultChatId = isSavedDialog ? global.currentUserId! : peer.id;
-
-  global = setChatMediaSearchLoading(global, resultChatId, threadId, true, tabId);
+  global = setChatMediaSearchLoading(global, resultChatId, threadId, mediaType, true, tabId);
   setGlobal(global);
 
   const result = await callApi('searchMessagesInChat', {
     peer,
-    type: 'media',
+    type: mediaType,
     limit,
     threadId,
     offsetId,
@@ -464,8 +522,10 @@ async function searchChatMedia<T extends GlobalState>(
   global = getGlobal();
 
   if (!result) {
-    global = setChatMediaSearchLoading(global, resultChatId, threadId, false, tabId);
+    global = setChatMediaSearchLoading(global, resultChatId, threadId, mediaType, false, tabId);
     setGlobal(global);
+    const hasQueuedRequest = runPendingChatMediaRequest(global, sourceChatId, resultChatId, threadId, mediaType, tabId);
+    if (!hasQueuedRequest) settlePlayerStepForSearch(sourceChatId, threadId, mediaType, tabId, false);
     return;
   }
 
@@ -480,17 +540,77 @@ async function searchChatMedia<T extends GlobalState>(
   global = addChatMessagesById(global, resultChatId, byId);
 
   const loadingState = calcLoadingState(direction, limit, newFoundIds.length, currentSegment);
+  if (!currentSegment && isEdgeAnchor) {
+    if (currentMediaMessageId === PLAYLIST_OLDEST_ANCHOR_ID) loadingState.areAllItemsLoadedBackwards = true;
+    if (currentMediaMessageId === PLAYLIST_NEWEST_ANCHOR_ID) loadingState.areAllItemsLoadedForwards = true;
+  }
 
-  const filteredIds = getMessageContentIds(byId, newFoundIds, 'media');
+  const filteredIds = getMessageContentIds(byId, newFoundIds, mediaType);
   currentSegment = mergeWithChatMediaSearchSegment(
     filteredIds,
     loadingState,
     currentSegment,
   );
 
+  const latestSearchParams = selectChatMediaSearch(global, resultChatId, threadId, mediaType, tabId)
+    || chatMediaSearchParams;
   global = updateChatMediaSearchResults(
-    global, resultChatId, threadId, currentSegment, chatMediaSearchParams, tabId,
+    global, resultChatId, threadId, mediaType, currentSegment, latestSearchParams, tabId,
   );
-  global = setChatMediaSearchLoading(global, resultChatId, threadId, false, tabId);
+  global = setChatMediaSearchLoading(global, resultChatId, threadId, mediaType, false, tabId);
   setGlobal(global);
+
+  const hasQueuedRequest = runPendingChatMediaRequest(global, sourceChatId, resultChatId, threadId, mediaType, tabId);
+
+  if (mediaType === 'media') return;
+
+  if (global.audioPlayer.orderMode === 'shuffle') {
+    getActions().loadShufflePlaylist({ tabId });
+  }
+
+  if (!hasQueuedRequest) settlePlayerStepForSearch(sourceChatId, threadId, mediaType, tabId, true);
+}
+
+function runPendingChatMediaRequest<T extends GlobalState>(
+  global: T,
+  chatId: string,
+  resultChatId: string,
+  threadId: ThreadId,
+  mediaType: SharedMediaType,
+  tabId: number,
+) {
+  global = getGlobal();
+  const pendingRequest = selectChatMediaSearch(global, resultChatId, threadId, mediaType, tabId)?.pendingRequest;
+  if (!pendingRequest) return false;
+
+  global = updateChatMediaSearchPendingRequest(global, resultChatId, threadId, mediaType, undefined, tabId);
+  setGlobal(global);
+
+  getActions().searchChatMediaMessages({
+    chatId,
+    threadId,
+    mediaType,
+    currentMediaMessageId: pendingRequest.currentMediaMessageId,
+    direction: pendingRequest.direction,
+    tabId,
+  });
+
+  return true;
+}
+
+function settlePlayerStepForSearch(
+  chatId: string,
+  threadId: ThreadId,
+  mediaType: SharedMediaType,
+  tabId: number,
+  shouldContinue: boolean,
+) {
+  if (mediaType === 'media') return;
+
+  const global = getGlobal();
+  const source = selectPlaybackSource(global, tabId);
+  if (source?.type !== 'chat') return;
+  if (source.chatId !== chatId || source.threadId !== threadId || source.mediaType !== mediaType) return;
+
+  getActions().settlePendingPlaylistStep({ shouldContinue, tabId });
 }

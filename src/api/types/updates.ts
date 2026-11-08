@@ -30,7 +30,6 @@ import type {
   ApiQuickReply,
   ApiReaction,
   ApiReactions,
-  ApiRichMessage,
   ApiStickerSet,
   ApiThreadInfo,
   ApiWebPage,
@@ -45,12 +44,14 @@ import type {
   ApiSessionData,
 } from './misc';
 import type { ApiEmojiStatusType, ApiPeerSettings } from './peers';
+import type { ApiRichMessage } from './richMessage';
 import type { ApiPrivacyKey, LangPackStringValue, PrivacyVisibility } from './settings';
 import type { ApiStarGiftAuctionUserState, ApiTypeCurrencyAmount, ApiTypeStarGiftAuctionState } from './stars';
 import type { ApiStealthMode, ApiStory, ApiStorySkipped } from './stories';
 import type {
   ApiUser, ApiUserFullInfo, ApiUserStatus,
 } from './users';
+import type { ApiTonConnectSession, ApiWalletGaslessInfo, ApiWalletStateResult, ApiWalletTransaction } from './wallet';
 
 export type ApiUpdateReady = {
   '@type': 'updateApiReady';
@@ -156,6 +157,8 @@ export type ApiUpdateChatTypingDraft = {
   chatId: string;
   id: string;
   threadId?: ThreadId;
+  canStop?: true;
+  shouldKeepOnStop?: true;
 } & ({
   text: ApiFormattedText;
   richMessage?: undefined;
@@ -163,6 +166,13 @@ export type ApiUpdateChatTypingDraft = {
   richMessage: ApiRichMessage;
   text?: undefined;
 });
+
+export type ApiUpdateChatTypingDraftStopped = {
+  '@type': 'updateChatTypingDraftStopped';
+  chatId: string;
+  id: string;
+  threadId?: ThreadId;
+};
 
 export type ApiUpdateStartEmojiInteraction = {
   '@type': 'updateStartEmojiInteraction';
@@ -257,6 +267,25 @@ export type ApiUpdateNewMessage = {
   wasDrafted?: boolean;
   poll?: ApiMessagePoll;
   webPages?: ApiWebPage[];
+};
+
+export type ApiUpdateNewEphemeralMessage = {
+  '@type': 'newEphemeralMessage';
+  message: ApiMessage;
+  shouldForceReply?: boolean;
+  webPages?: ApiWebPage[];
+};
+
+export type ApiUpdateEphemeralMessage = {
+  '@type': 'updateEphemeralMessage';
+  message: ApiMessage;
+  webPages?: ApiWebPage[];
+};
+
+export type ApiUpdateDeleteEphemeralMessages = {
+  '@type': 'deleteEphemeralMessages';
+  chatId: string;
+  messageIds: number[];
 };
 
 export type ApiUpdateMessage = {
@@ -486,6 +515,12 @@ export type ApiUpdatePeerSettings = {
   '@type': 'updatePeerSettings';
   id: string;
   settings: ApiPeerSettings;
+};
+
+export type ApiUpdatePeerHistoryTtl = {
+  '@type': 'updatePeerHistoryTtl';
+  id: string;
+  ttlPeriod?: number;
 };
 
 export type ApiUpdateUser = {
@@ -802,15 +837,20 @@ export type ApiUpdateViewForumAsMessages = {
 
 export type ApiUpdateMessageTranslations = {
   '@type': 'updateMessageTranslations';
+  requestId: string;
   chatId: string;
   messageIds: number[];
-  translations: ApiFormattedText[];
+  translations: {
+    text?: ApiFormattedText;
+    richMessage?: ApiRichMessage;
+  }[];
   toLanguageCode: string;
   tone?: TranslationTone;
 };
 
 export type ApiUpdateFailedMessageTranslations = {
   '@type': 'failedMessageTranslations';
+  requestId: string;
   chatId: string;
   messageIds: number[];
   toLanguageCode: string;
@@ -892,6 +932,39 @@ export type ApiUpdateStarsBalance = {
   balance: ApiTypeCurrencyAmount;
 };
 
+export type ApiUpdateWalletState = {
+  '@type': 'updateWalletState';
+  wallet: ApiWalletStateResult;
+};
+
+export type ApiUpdateWalletTonConnectSession = {
+  '@type': 'updateWalletTonConnectSession';
+  session: ApiTonConnectSession;
+};
+
+export type ApiUpdateWalletTonConnectPendingDisconnect = {
+  '@type': 'updateWalletTonConnectPendingDisconnect';
+  sessionIds: string[];
+};
+
+// Reported by the chain activity stream
+export type ApiUpdateWalletActivity = {
+  '@type': 'updateWalletActivity';
+};
+
+// `transaction` is present once the transfer is on the chain
+export type ApiUpdateWalletSentTransaction = {
+  '@type': 'updateWalletSentTransaction';
+  msgHash: string;
+  isGasless?: boolean;
+  transaction?: ApiWalletTransaction;
+};
+
+export type ApiUpdateWalletGaslessInfo = {
+  '@type': 'updateWalletGaslessInfo';
+  gaslessInfo: ApiWalletGaslessInfo;
+};
+
 export type ApiUpdateStarGiftAuctionState = {
   '@type': 'updateStarGiftAuctionState';
   giftId: string;
@@ -941,6 +1014,8 @@ export type ApiUpdateLangPackTooLong = {
 
 export type ApiUpdateLangPack = {
   '@type': 'updateLangPack';
+  langCode: string;
+  fromVersion: number;
   version: number;
   strings: Record<string, LangPackStringValue>;
   keysToRemove: string[];
@@ -948,6 +1023,7 @@ export type ApiUpdateLangPack = {
 
 export type ApiUpdateBotCommands = {
   '@type': 'updateBotCommands';
+  peerId: string;
   botId: string;
   commands?: ApiBotCommand[];
 };
@@ -964,19 +1040,22 @@ export type ApiUpdate = (
   ApiUpdateChatMembers | ApiUpdateChatParticipantRank | ApiUpdateChatJoin | ApiUpdateChatLeave
   | ApiUpdateChatPinned | ApiUpdatePinnedMessageIds |
   ApiUpdateChatListType | ApiUpdateChatFolder | ApiUpdateChatFoldersOrder | ApiUpdateRecommendedChatFolders |
-  ApiUpdateNewMessage | ApiUpdateMessage | ApiUpdateThreadInfo | ApiUpdateCommonBoxMessages | ApiUpdatePasskeyOption |
+  ApiUpdateNewMessage | ApiUpdateMessage | ApiUpdateNewEphemeralMessage | ApiUpdateEphemeralMessage
+  | ApiUpdateDeleteEphemeralMessages | ApiUpdateThreadInfo | ApiUpdateCommonBoxMessages | ApiUpdatePasskeyOption |
   ApiUpdateDeleteMessages | ApiUpdateMessagePoll | ApiUpdateMessagePollUnread | ApiUpdateMessagePollVote |
   ApiUpdateDeleteHistory |
   ApiDeleteParticipantHistory | ApiUpdateMessageSendSucceeded | ApiUpdateMessageSendFailed |
   ApiUpdateServiceNotification | ApiDeleteContact | ApiUpdateUser | ApiUpdateUserStatus |
-  ApiUpdateUserFullInfo | ApiUpdateVideoProcessingPending | ApiUpdatePeerSettings | ApiUpdateUserAlreadyAuthorized |
+  ApiUpdateUserFullInfo | ApiUpdateVideoProcessingPending | ApiUpdatePeerSettings | ApiUpdatePeerHistoryTtl
+  | ApiUpdateUserAlreadyAuthorized |
   ApiUpdateAvatar | ApiUpdateMessageImage | ApiUpdateDraftMessage | ApiUpdateScheduledMessageSendFailed |
   ApiUpdateError | ApiUpdateResetContacts | ApiUpdateStartEmojiInteraction | ApiUpdateThreadReadState |
   ApiUpdateFavoriteStickers | ApiUpdateStickerSet | ApiUpdateStickerSets | ApiUpdateStickerSetsOrder |
   ApiUpdateRecentStickers | ApiUpdateSavedGifs | ApiUpdateNewScheduledMessage | ApiUpdateMoveStickerSetToTop |
   ApiUpdateScheduledMessageSendSucceeded | ApiUpdateScheduledMessage | ApiUpdateStarPaymentStateCompleted |
   ApiUpdateDeleteScheduledMessages | ApiUpdateResetMessages | ApiUpdateMessageTranslations |
-  ApiUpdateFailedMessageTranslations | ApiUpdateWebPage | ApiUpdateChatTypingDraft | ApiUpdateDiscussion |
+  ApiUpdateFailedMessageTranslations | ApiUpdateWebPage | ApiUpdateChatTypingDraft | ApiUpdateChatTypingDraftStopped
+  | ApiUpdateDiscussion |
   ApiUpdateTwoFaError | ApiUpdateTwoFaStateWaitCode | ApiUpdateWebViewResultSent |
   ApiUpdateJoinChatWebViewDecision |
   ApiUpdateDefaultNotifySettings | ApiUpdatePeerNotifySettings | ApiUpdatePeerBlocked | ApiUpdatePrivacy |
@@ -998,7 +1077,9 @@ export type ApiUpdate = (
   | ApiDeleteQuickReply | ApiUpdateDeleteQuickReplyMessages | ApiUpdateDeleteProfilePhoto | ApiUpdateNewProfilePhoto
   | ApiUpdateEntities | ApiUpdatePaidReactionPrivacy | ApiUpdateLangPackTooLong | ApiUpdateLangPack
   | ApiUpdateNotSupportedInFrozenAccountError
-  | ApiUpdateAiComposeTones
+  | ApiUpdateAiComposeTones | ApiUpdateWalletState | ApiUpdateWalletActivity
+  | ApiUpdateWalletSentTransaction | ApiUpdateWalletGaslessInfo
+  | ApiUpdateWalletTonConnectSession | ApiUpdateWalletTonConnectPendingDisconnect
 );
 
 export type OnApiUpdate = (update: ApiUpdate) => void;

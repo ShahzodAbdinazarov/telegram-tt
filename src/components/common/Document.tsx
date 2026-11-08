@@ -19,9 +19,9 @@ import { preloadDocumentMedia } from './helpers/preloadDocumentMedia';
 
 import useFlag from '../../hooks/useFlag';
 import { useIsIntersecting } from '../../hooks/useIntersectionObserver';
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useMediaWithLoadProgress from '../../hooks/useMediaWithLoadProgress';
-import useOldLang from '../../hooks/useOldLang';
 
 import Checkbox from '../ui/Checkbox';
 import ConfirmDialog from '../ui/ConfirmDialog';
@@ -40,6 +40,7 @@ type OwnProps = {
   sender?: string;
   autoLoadFileMaxSizeMb?: number;
   isDownloading?: boolean;
+  noDownload?: boolean;
   shouldWarnAboutFiles?: boolean;
   id?: string;
   onCancelUpload?: NoneToVoidFunction;
@@ -70,6 +71,7 @@ const Document = ({
   isSelectable,
   shouldWarnAboutFiles,
   isDownloading,
+  noDownload,
   message,
   id,
   onCancelUpload,
@@ -81,7 +83,7 @@ const Document = ({
 
   const ref = useRef<HTMLDivElement>();
 
-  const oldLang = useOldLang();
+  const lang = useLang();
   const [isFileIpDialogOpen, openFileIpDialog, closeFileIpDialog] = useFlag();
   const [shouldNotWarnAboutFiles, setShouldNotWarnAboutFiles] = useState(false);
 
@@ -144,6 +146,7 @@ const Document = ({
   }, [withMediaViewer, message]);
 
   const handleDownload = useLastCallback(() => {
+    if (noDownload) return;
     downloadMedia({ media: document, originMessage: message });
   });
 
@@ -193,43 +196,42 @@ const Document = ({
   });
 
   return (
-    <>
-      <File
-        ref={ref}
-        id={id}
-        name={fileName}
-        extension={extension}
-        size={size}
-        timestamp={datetime}
-        previewMedia={previewMedia}
-        observeIntersection={observeIntersection}
-        previewSize={fileSize}
-        isTransferring={isTransferring}
-        isUploading={isUploading}
-        transferProgress={transferProgress}
-        className={className}
-        sender={sender}
-        isSelectable={isSelectable}
-        isSelected={isSelected}
-        actionIcon={withMediaViewer ? (isDocumentVideo(document) ? 'play' : 'eye') : 'download'}
-        contextActions={contextActions}
-        onClick={handleClick}
-        onDateClick={onDateClick ? handleDateClick : undefined}
-      />
+    <File
+      ref={ref}
+      id={id}
+      name={fileName}
+      extension={extension}
+      size={size}
+      timestamp={datetime}
+      previewMedia={previewMedia}
+      observeIntersection={observeIntersection}
+      previewSize={fileSize}
+      isTransferring={isTransferring}
+      isUploading={isUploading}
+      transferProgress={transferProgress}
+      className={className}
+      sender={sender}
+      isSelectable={isSelectable}
+      isSelected={isSelected}
+      actionIcon={withMediaViewer ? (isDocumentVideo(document) ? 'play' : 'eye') : 'download'}
+      contextActions={contextActions}
+      onClick={!noDownload || withMediaViewer || (isUploading && onCancelUpload) ? handleClick : undefined}
+      onDateClick={onDateClick ? handleDateClick : undefined}
+    >
       <ConfirmDialog
         isOpen={isFileIpDialogOpen}
         onClose={closeFileIpDialog}
         confirmHandler={handleFileIpConfirm}
       >
-        {oldLang('lng_launch_svg_warning')}
+        {lang('LaunchSvgWarning')}
         <Checkbox
           className="dialog-checkbox"
           checked={shouldNotWarnAboutFiles}
-          label={oldLang('lng_launch_exe_dont_ask')}
+          label={lang('LaunchExeDontAsk')}
           onCheck={setShouldNotWarnAboutFiles}
         />
       </ConfirmDialog>
-    </>
+    </File>
   );
 };
 

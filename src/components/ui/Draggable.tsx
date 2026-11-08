@@ -1,4 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
 import {
   memo, useCallback, useEffect, useMemo, useRef, useState,
 } from '../../lib/teact/teact';
@@ -7,7 +6,7 @@ import buildClassName from '../../util/buildClassName';
 import buildStyle from '../../util/buildStyle';
 import getPointerPosition from '../../util/events/getPointerPosition';
 
-import useOldLang from '../../hooks/useOldLang';
+import useLang from '../../hooks/useLang';
 
 import Icon from '../common/icons/Icon';
 
@@ -38,7 +37,7 @@ type OwnProps = {
 
 const ZERO_POINT: TPoint = { x: 0, y: 0 };
 
-const Draggable: FC<OwnProps> = ({
+const Draggable = ({
   children,
   id,
   onDrag,
@@ -46,8 +45,8 @@ const Draggable: FC<OwnProps> = ({
   style: externalStyle,
   knobStyle,
   isDisabled,
-}) => {
-  const lang = useOldLang();
+}: OwnProps) => {
+  const lang = useLang();
   const ref = useRef<HTMLDivElement>();
 
   const [state, setState] = useState<DraggableState>({
@@ -156,7 +155,7 @@ const Draggable: FC<OwnProps> = ({
 
       {!isDisabled && (
         <div
-          aria-label={lang('i18n_dragToSort')}
+          aria-label={lang('DragToSortAria')}
           tabIndex={0}
           role="button"
           className={buildClassName(styles.knob, 'div-button', 'draggable-knob')}
@@ -164,7 +163,7 @@ const Draggable: FC<OwnProps> = ({
           onTouchStart={handleMouseDown}
           style={knobStyle}
         >
-          <Icon name="sort" className={styles.icon} />
+          <Icon name="hamburger" className={styles.icon} />
         </div>
       )}
     </div>

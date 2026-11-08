@@ -6,9 +6,8 @@ import type {
 import type { ActionReturnType, GlobalState, TabArgs } from '../../types';
 
 import { GLOBAL_SEARCH_SLICE, GLOBAL_TOPIC_SEARCH_SLICE } from '../../../config';
-import { timestampPlusDay } from '../../../util/dates/oldDateFormat';
+import { timestampPlusDay } from '../../../util/dates/dateMath';
 import { isDeepLink, tryParseDeepLink } from '../../../util/deepLinkParser';
-import { toChannelId } from '../../../util/entities/ids';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { getTranslationFn } from '../../../util/localization';
 import { formatStarsAsText } from '../../../util/localization/format';
@@ -28,6 +27,7 @@ import {
 import {
   selectChat, selectChatByUsername, selectChatMessage, selectCurrentGlobalSearchQuery, selectPeer, selectTabState,
 } from '../../selectors';
+import { selectPlaybackSource } from '../../selectors/audioPlayer';
 
 const searchThrottled = throttle((cb) => cb(), 500, false);
 
@@ -292,6 +292,7 @@ async function searchMessagesGlobal<T extends GlobalState>(global: T, params: {
   if (!result || (query !== '' && query !== currentSearchQuery)) {
     global = updateGlobalSearchFetchingStatus(global, { messages: false, publicPosts: false }, tabId);
     setGlobal(global);
+    settlePlayerStepForGlobalSearch(type, tabId, false);
     return;
   }
 
@@ -340,6 +341,12 @@ async function searchMessagesGlobal<T extends GlobalState>(global: T, params: {
 
   setGlobal(global);
 
+  global = getGlobal();
+  if (global.audioPlayer.orderMode === 'shuffle' && selectPlaybackSource(global, tabId)?.type === 'globalSearch') {
+    getActions().loadShufflePlaylist({ tabId });
+  }
+  settlePlayerStepForGlobalSearch(type, tabId, true);
+
   if (type === 'publicPosts' && searchFlood && !searchFlood.queryIsFree && !offsetId
     && previousSearchFlood?.remains === 0) {
     const lang = getTranslationFn();
@@ -370,8 +377,7 @@ async function getMessageByPublicLink(global: GlobalState, link: { username: str
 
 function getMessageByPrivateLink(global: GlobalState, link: { channelId: string; messageId: number }) {
   const { channelId, messageId } = link;
-  const internalChannelId = toChannelId(channelId);
-  const chat = selectChat(global, internalChannelId);
+  const chat = selectChat(global, channelId);
   if (!chat) {
     return undefined;
   }
@@ -388,4 +394,12 @@ async function getChatGroupOrChannelMessage(global: GlobalState, chat: ApiChat, 
   }
   const result = await callApi('fetchMessage', { chat, messageId });
   return result === 'MESSAGE_DELETED' ? undefined : result?.message;
+}
+
+function settlePlayerStepForGlobalSearch(type: ApiGlobalMessageSearchType, tabId: number, shouldContinue: boolean) {
+  const global = getGlobal();
+  const source = selectPlaybackSource(global, tabId);
+  if (source?.type !== 'globalSearch' || source.mediaType !== type) return;
+
+  getActions().settlePendingPlaylistStep({ shouldContinue, tabId });
 }

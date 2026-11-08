@@ -5,7 +5,8 @@ import type { ThreadId } from '../../types';
 import { ApiMessageEntityTypes, type LinkContext } from '../../api/types';
 
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
-import { ensureProtocol, getUnicodeUrl, isMixedScriptUrl } from '../../util/browser/url';
+import { ensureProtocol, getUnicodeUrl, isSuspiciousUrl } from '../../util/browser/url';
+import { MouseButton } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
 
 import useLastCallback from '../../hooks/useLastCallback';
@@ -47,17 +48,20 @@ const SafeLink = ({
 
   const handleClick = useLastCallback((e: React.MouseEvent<HTMLAnchorElement, MouseEvent>) => {
     if (!url) return true;
+    if (e.button !== MouseButton.Main && e.button !== MouseButton.Auxiliary) return true;
 
     e.preventDefault();
 
-    const isTrustedLink = isRegularLink && !isMixedScriptUrl(url);
+    const shouldOpenInNewTab = e.button === MouseButton.Auxiliary || e.ctrlKey || e.metaKey || e.shiftKey;
+    const isTrustedLink = isRegularLink && !isSuspiciousUrl(url);
     const linkContext: LinkContext | undefined = chatId && messageId
       ? { type: 'message', chatId, threadId, messageId }
       : undefined;
     openUrl({
       url,
       shouldSkipModal: shouldSkipModal || isTrustedLink,
-      tryInstant: tryInstantView,
+      ignoreDeepLinks: shouldOpenInNewTab,
+      tryInstant: shouldOpenInNewTab ? false : tryInstantView,
       previewId,
       linkContext,
     });
@@ -82,6 +86,7 @@ const SafeLink = ({
       rel="noopener noreferrer"
       className={classNames}
       onClick={handleClick}
+      onAuxClick={handleClick}
       dir={isRtl ? 'rtl' : 'auto'}
       data-entity-type={entityType}
     >

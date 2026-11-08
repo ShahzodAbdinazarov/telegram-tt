@@ -1,4 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
 import {
   memo, useEffect, useMemo, useState,
 } from '../../lib/teact/teact';
@@ -18,12 +17,11 @@ import {
 } from '../../global/selectors';
 import buildClassName from '../../util/buildClassName';
 import { getServerTime } from '../../util/serverTime';
-import renderText from '../common/helpers/renderText';
 
 import useDebouncedCallback from '../../hooks/useDebouncedCallback';
 import useFlag from '../../hooks/useFlag';
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 import useScrolledState from '../../hooks/useScrolledState';
 
 import Icon from '../common/icons/Icon';
@@ -62,11 +60,10 @@ function StoryViewModal({
     loadStoryViewList, closeStoryViewModal, clearStoryViews,
   } = getActions();
 
+  const lang = useLang();
   const [areJustContacts, markJustContacts, unmarkJustContacts] = useFlag(false);
   const [areReactionsFirst, markReactionsFirst, unmarkReactionsFirst] = useFlag(true);
   const [query, setQuery] = useState('');
-
-  const lang = useOldLang();
 
   const isOpen = Boolean(story);
   const isExpired = Boolean(viewersExpireDate) && viewersExpireDate < getServerTime();
@@ -119,8 +116,8 @@ function StoryViewModal({
     closeStoryViewModal();
   });
 
-  const MoreMenuButton: FC<{ onTrigger: () => void; isOpen?: boolean }> = useMemo(() => {
-    return ({ onTrigger, isOpen: isMenuOpen }) => (
+  const MoreMenuButton = useMemo(() => {
+    return ({ onTrigger, isOpen: isMenuOpen }: { onTrigger: () => void; isOpen?: boolean }) => (
       <Button
         fluid
         size="tiny"
@@ -130,7 +127,7 @@ function StoryViewModal({
         onClick={onTrigger}
         ariaLabel={lang('SortBy')}
       >
-        <Icon name={areReactionsFirst ? 'heart-outline' : 'recent'} className={styles.iconSort} />
+        <Icon name={areReactionsFirst ? 'heart-outline' : 'clock'} className={styles.iconSort} />
         <Icon name="down" className={styles.iconDown} />
       </Button>
     );
@@ -180,7 +177,7 @@ function StoryViewModal({
                   <Icon name="check" className={styles.check} />
                 )}
               </MenuItem>
-              <MenuItem icon="recent" onClick={unmarkReactionsFirst}>
+              <MenuItem icon="clock" onClick={unmarkReactionsFirst}>
                 {lang('SortByTime')}
                 {!areReactionsFirst && (
                   <Icon name="check" className={styles.check} />
@@ -199,15 +196,14 @@ function StoryViewModal({
       >
         {isExpired && !isLoading && !query && Boolean(!sortedViews?.length) && (
           <div className={buildClassName(styles.info, styles.centeredInfo)}>
-            {renderText(
-              lang(isCurrentUserPremium ? 'ServerErrorViewers' : 'ExpiredViewsStub'),
-              ['simple_markdown', 'emoji'],
-            )}
+            {lang(isCurrentUserPremium ? 'ServerErrorViewers' : 'ExpiredViewsStub', undefined, {
+              withNodes: true, withMarkdown: true,
+            })}
           </div>
         )}
         {!isLoading && Boolean(query.length) && !sortedViews?.length && (
           <div className={styles.info}>
-            {lang('Story.ViewList.EmptyTextSearch')}
+            {lang('StoryViewListEmptyTextSearch')}
           </div>
         )}
         <InfiniteScroll
@@ -233,7 +229,7 @@ function StoryViewModal({
           ))}
           {notAllAvailable && (
             <div key="not-all-available" className={buildClassName(styles.info, styles.bottomInfo)}>
-              {lang('Story.ViewList.NotFullyRecorded')}
+              {lang('StoryViewListNotFullyRecorded')}
             </div>
           )}
         </InfiniteScroll>

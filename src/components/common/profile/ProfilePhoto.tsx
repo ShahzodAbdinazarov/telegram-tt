@@ -106,7 +106,7 @@ const ProfilePhoto = ({
 
   const specialIcon = useMemo(() => {
     if (isSavedMessages) {
-      return isSavedDialog ? 'my-notes' : 'avatar-saved-messages';
+      return isSavedDialog ? 'my-notes' : 'saved-messages-filled';
     }
 
     if (isDeleted) {
@@ -161,7 +161,7 @@ const ProfilePhoto = ({
       </>
     );
   } else if (user) {
-    const userFullName = getUserFullName(user);
+    const userFullName = getUserFullName(lang, user);
     content = userFullName ? getFirstLetters(userFullName, 2) : undefined;
   } else if (chat) {
     const title = getChatTitle(lang, chat);

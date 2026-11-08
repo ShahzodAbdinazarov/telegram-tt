@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo, useEffect, useRef } from '../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../global';
 
@@ -6,11 +5,10 @@ import type { ApiSendAsPeerId } from '../../../api/types';
 
 import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
-import setTooltipItemVisible from '../../../util/setTooltipItemVisible';
 
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMouseInside from '../../../hooks/useMouseInside';
-import useOldLang from '../../../hooks/useOldLang';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 
 import Avatar from '../../common/Avatar';
@@ -30,21 +28,21 @@ export type OwnProps = {
   onClose: () => void;
 };
 
-const SendAsMenu: FC<OwnProps> = ({
+const SendAsMenu = ({
   isOpen,
   chatId,
   selectedSendAsId,
   sendAsPeerIds,
   isCurrentUserPremium,
   onClose,
-}) => {
+}: OwnProps) => {
   const { saveDefaultSendAs, showNotification } = getActions();
 
   // No need for expensive global updates on users and chats, so we avoid them
   const usersById = getGlobal().users.byId;
   const chatsById = getGlobal().chats.byId;
 
-  const lang = useOldLang();
+  const lang = useLang();
   const containerRef = useRef<HTMLDivElement>();
 
   const [handleMouseEnter, handleMouseLeave, markMouseInside] = useMouseInside(isOpen, onClose, undefined);
@@ -70,7 +68,7 @@ const SendAsMenu: FC<OwnProps> = ({
   });
 
   useEffect(() => {
-    setTooltipItemVisible('.chat-item-clickable', selectedSendAsIndex, containerRef);
+    containerRef.current?.querySelector<HTMLElement>('.focus')?.scrollIntoView({ block: 'nearest' });
   }, [selectedSendAsIndex]);
 
   useEffect(() => {
@@ -81,6 +79,7 @@ const SendAsMenu: FC<OwnProps> = ({
 
   return (
     <Menu
+      ref={containerRef}
       isOpen={isOpen}
       positionX="left"
       positionY="bottom"
@@ -103,8 +102,11 @@ const SendAsMenu: FC<OwnProps> = ({
             handleUserSelect(id);
           } else {
             showNotification({
-              message: lang('SelectSendAsPeerPremiumHint'),
-              actionText: lang('Open'),
+              message: {
+                key: 'SelectSendAsPeerPremiumHint',
+                options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+              },
+              actionText: { key: 'Open' },
               action: {
                 action: 'openPremiumModal',
                 payload: {},
@@ -123,7 +125,7 @@ const SendAsMenu: FC<OwnProps> = ({
             onClick={handleClick}
             focus={selectedSendAsIndex === index}
             rightElement={!isCurrentUserPremium && isPremium
-              && <Icon name="lock-badge" className="send-as-icon-locked" />}
+              && <Icon name="lock-filled" className="send-as-icon-locked" />}
           >
             <Avatar
               size="small"
@@ -135,7 +137,7 @@ const SendAsMenu: FC<OwnProps> = ({
               <span className="subtitle">
                 {user
                   ? lang('VoipGroupPersonalAccount')
-                  : lang('Subscribers', chat?.membersCount, 'i')}
+                  : lang('Subscribers', { count: chat.membersCount || 0 }, { pluralValue: chat.membersCount || 0 })}
               </span>
             </div>
           </ListItem>

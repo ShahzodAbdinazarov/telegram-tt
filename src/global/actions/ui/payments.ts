@@ -148,10 +148,10 @@ addActionHandler('resetGiftProfileFilter', (global, actions, payload): ActionRet
 });
 
 addActionHandler('openPaymentMessageConfirmDialogOpen', (global, actions, payload): ActionReturnType => {
-  const { tabId = getCurrentTabId() } = payload || {};
+  const { dialogKey, tabId = getCurrentTabId() } = payload;
 
   return updateTabState(global, {
-    isPaymentMessageConfirmDialogOpen: true,
+    paymentMessageConfirmDialogKey: dialogKey,
   }, tabId);
 });
 
@@ -159,7 +159,7 @@ addActionHandler('closePaymentMessageConfirmDialogOpen', (global, actions, paylo
   const { tabId = getCurrentTabId() } = payload || {};
 
   return updateTabState(global, {
-    isPaymentMessageConfirmDialogOpen: false,
+    paymentMessageConfirmDialogKey: undefined,
   }, tabId);
 });
 
@@ -167,7 +167,6 @@ addActionHandler('openPriceConfirmModal', (global, actions, payload): ActionRetu
   const {
     originalAmount,
     newAmount,
-    currency,
     directInfo,
     tabId = getCurrentTabId(),
   } = payload;
@@ -176,7 +175,6 @@ addActionHandler('openPriceConfirmModal', (global, actions, payload): ActionRetu
     priceConfirmModal: {
       originalAmount,
       newAmount,
-      currency,
       directInfo,
     },
   }, tabId);

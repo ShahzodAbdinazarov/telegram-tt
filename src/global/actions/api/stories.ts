@@ -1,8 +1,7 @@
-import type { ActionReturnType } from '../../types';
+import type { ActionReturnType, ReportSection } from '../../types';
 
 import { DEBUG, MESSAGE_ID_REQUIRED_ERROR } from '../../../config';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
-import { oldTranslate } from '../../../util/oldLangProvider';
 import { getServerTime } from '../../../util/serverTime';
 import { callApi } from '../../../api/gramjs';
 import { buildApiInputPrivacyRules } from '../../helpers';
@@ -480,7 +479,10 @@ addActionHandler('reportStory', async (global, actions, payload): Promise<void> 
 
   if (error === MESSAGE_ID_REQUIRED_ERROR) {
     actions.showNotification({
-      message: oldTranslate('lng_report_please_select_messages'),
+      message: {
+        key: 'ReportPleaseSelectMessages',
+        options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+      },
       tabId,
     });
     actions.closeReportModal({ tabId });
@@ -492,8 +494,11 @@ addActionHandler('reportStory', async (global, actions, payload): Promise<void> 
   if (result.type === 'reported') {
     actions.showNotification({
       message: result
-        ? oldTranslate('ReportPeer.AlertSuccess')
-        : 'An error occurred while submitting your report. Please, try again later.',
+        ? {
+          key: 'ReportPeerAlertSuccess',
+          options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+        }
+        : { key: 'ReportSubmitError' },
       tabId,
     });
     actions.closeReportModal({ tabId });
@@ -503,12 +508,16 @@ addActionHandler('reportStory', async (global, actions, payload): Promise<void> 
   if (result.type === 'selectOption') {
     global = getGlobal();
     const oldSections = selectTabState(global, tabId).reportModal?.sections;
-    const selectedOption = oldSections?.[oldSections.length - 1]?.options?.find((o) => o.option === option);
+    const latestSection = oldSections?.[oldSections.length - 1];
+    const selectedOption = latestSection?.type === 'options'
+      ? latestSection.options.find((item) => item.option === option)
+      : undefined;
     const newSection = {
+      type: 'options',
       title: result.title,
       options: result.options,
       subtitle: selectedOption?.text,
-    };
+    } satisfies ReportSection;
     global = updateTabState(global, {
       reportModal: {
         messageIds: [storyId],
@@ -524,12 +533,16 @@ addActionHandler('reportStory', async (global, actions, payload): Promise<void> 
   if (result.type === 'comment') {
     global = getGlobal();
     const oldSections = selectTabState(global, tabId).reportModal?.sections;
-    const selectedOption = oldSections?.[oldSections.length - 1]?.options?.find((o) => o.option === option);
+    const latestSection = oldSections?.[oldSections.length - 1];
+    const selectedOption = latestSection?.type === 'options'
+      ? latestSection.options.find((item) => item.option === option)
+      : undefined;
     const newSection = {
+      type: 'comment',
       isOptional: result.isOptional,
       option: result.option,
       title: selectedOption?.text,
-    };
+    } satisfies ReportSection;
     global = updateTabState(global, {
       reportModal: {
         messageIds: [storyId],
@@ -598,14 +611,18 @@ addActionHandler('loadStoriesMaxIds', async (global, actions, payload): Promise<
 
   global = getGlobal();
   result.forEach((maxId, i) => {
-    const peer = peers[i];
-    global = updatePeer(global, peer.id, {
-      maxStoryId: maxId.maxId,
-      hasStories: Boolean(maxId.maxId),
-    });
+    const peerId = peers[i].id;
+    const hasStories = Boolean(maxId.maxId);
+    const peer = selectPeer(global, peerId);
+    if (peer && (peer.maxStoryId !== maxId.maxId || peer.hasStories !== hasStories)) {
+      global = updatePeer(global, peerId, {
+        maxStoryId: maxId.maxId,
+        hasStories,
+      });
+    }
 
     if (maxId.maxId && maxId.maxId > 0) {
-      peerIdsToLoad.push(peer.id);
+      peerIdsToLoad.push(peerId);
     }
   });
   setGlobal(global);

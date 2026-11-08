@@ -1,26 +1,28 @@
 import { addCallback } from '../../../lib/teact/teactn';
 
 import type { ActionReturnType, GlobalState } from '../../types';
-import { type LangCode, LeftColumnContent, SettingsScreens } from '../../../types';
+import { LeftColumnContent, SettingsScreens } from '../../../types';
 
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import { IS_IOS } from '../../../util/browser/windowEnvironment';
 import { disableDebugConsole, initDebugConsole } from '../../../util/debugConsole';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
-import { setTimeFormat as setLocalizedTimeFormat } from '../../../util/localization';
-import { oldSetLanguage, setTimeFormat as setLegacyTimeFormat } from '../../../util/oldLangProvider';
+import { loadAndChangeLanguage, setTimeFormat } from '../../../util/localization';
 import { applyPerformanceSettings } from '../../../util/perfomanceSettings';
 import switchTheme from '../../../util/switchTheme';
 import { updatePeerColors } from '../../../util/theme';
+import { updateSelectedWallpaperBlobs } from '../../../util/wallpaperStorage';
 import { callApi, setShouldEnableDebugLog } from '../../../api/gramjs';
 import { addTabStateResetterAction } from '../../helpers/meta';
 import {
-  addActionHandler, getActions, setGlobal,
+  addActionHandler, getActions, getGlobal, setGlobal,
 } from '../../index';
 import { replaceSettings, updateSharedSettings, updateThemeSettings } from '../../reducers';
 import { updateTabState } from '../../reducers/tabs';
 import { selectCanAnimateInterface, selectChatFolder, selectTabState } from '../../selectors';
 import { selectSharedSettings } from '../../selectors/sharedState';
+
+const MAX_RECENTLY_FOUND_SETTINGS = 5;
 
 let prevGlobal: GlobalState | undefined;
 
@@ -56,12 +58,19 @@ addCallback((global: GlobalState) => {
   }
 
   if (sharedSettings.language !== oldSharedSettings.language) {
-    oldSetLanguage(sharedSettings.language as LangCode);
+    const langCode = sharedSettings.language;
+    void loadAndChangeLanguage(langCode).then((hasChanged) => {
+      global = getGlobal();
+      if (!hasChanged || selectSharedSettings(global).language !== langCode) return undefined;
+      return callApi('setLanguageCode', { langCode });
+    }).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.warn('Failed to announce language:', err);
+    });
   }
 
   if (sharedSettings.timeFormat !== oldSharedSettings.timeFormat) {
-    setLocalizedTimeFormat(sharedSettings.timeFormat);
-    setLegacyTimeFormat(sharedSettings.timeFormat);
+    setTimeFormat(sharedSettings.timeFormat);
   }
 
   if (sharedSettings.messageTextSize !== oldSharedSettings.messageTextSize) {
@@ -141,9 +150,33 @@ addActionHandler('updatePerformanceSettings', (global, actions, payload): Action
 
 addActionHandler('setThemeSettings', (global, actions, payload): ActionReturnType => {
   const { theme, ...settings } = payload;
+  const previousBackground = selectSharedSettings(global).themes[theme]?.background;
 
-  return updateThemeSettings(global, theme, settings);
+  global = updateThemeSettings(global, theme, settings);
+  if ('background' in settings) updateCustomBackgroundCache(global, previousBackground);
+
+  return global;
 });
+
+function updateCustomBackgroundCache(global: GlobalState, previousBackground: string | undefined) {
+  updateSelectedWallpaperBlobs(
+    getSelectedBackgrounds(global),
+    previousBackground,
+    getCurrentSelectedBackgrounds,
+    selectSharedSettings(global).shouldKeepLockScreenBackground,
+  );
+}
+
+function getCurrentSelectedBackgrounds() {
+  const global = getGlobal();
+  return getSelectedBackgrounds(global);
+}
+
+function getSelectedBackgrounds(global: GlobalState) {
+  return Object.values(selectSharedSettings(global).themes)
+    .map((themeSettings) => themeSettings?.background)
+    .filter((background): background is string => Boolean(background));
+}
 
 addActionHandler('requestNextFoldersAction', (global, actions, payload): ActionReturnType => {
   const { foldersAction, tabId = getCurrentTabId() } = payload;
@@ -164,7 +197,7 @@ addActionHandler('openLeftColumnContent', (global, actions, payload): ActionRetu
 });
 
 addActionHandler('openSettingsScreen', (global, actions, payload): ActionReturnType => {
-  const { screen, tabId = getCurrentTabId() } = payload;
+  const { screen, highlight, tabId = getCurrentTabId() } = payload;
   const tabState = selectTabState(global, tabId);
 
   actions.loadPrivacySettings({ skipIfCached: true });
@@ -174,8 +207,41 @@ addActionHandler('openSettingsScreen', (global, actions, payload): ActionReturnT
     leftColumn: {
       ...tabState.leftColumn,
       settingsScreen: screen || SettingsScreens.Main,
+      settingsHighlight: highlight,
     },
   }, tabId);
+});
+
+addActionHandler('clearSettingsHighlight', (global, actions, payload): ActionReturnType => {
+  const { tabId = getCurrentTabId() } = payload || {};
+  const tabState = selectTabState(global, tabId);
+  if (!tabState.leftColumn.settingsHighlight) return undefined;
+
+  return updateTabState(global, {
+    leftColumn: {
+      ...tabState.leftColumn,
+      settingsHighlight: undefined,
+    },
+  }, tabId);
+});
+
+addActionHandler('addRecentlyFoundSettingId', (global, actions, payload): ActionReturnType => {
+  const { id } = payload;
+  const otherIds = global.recentlyFoundSettingIds?.filter((recentId) => recentId !== id) || [];
+
+  return {
+    ...global,
+    recentlyFoundSettingIds: [id, ...otherIds].slice(0, MAX_RECENTLY_FOUND_SETTINGS),
+  };
+});
+
+addActionHandler('removeRecentlyFoundSettingId', (global, actions, payload): ActionReturnType => {
+  const { id } = payload;
+
+  return {
+    ...global,
+    recentlyFoundSettingIds: global.recentlyFoundSettingIds?.filter((recentId) => recentId !== id),
+  };
 });
 
 addActionHandler('openEditChatFolder', (global, actions, payload): ActionReturnType => {
@@ -238,3 +304,14 @@ addActionHandler('openPasskeyModal', (global, actions, payload): ActionReturnTyp
 });
 
 addTabStateResetterAction('closePasskeyModal', 'isPasskeyModalOpen');
+addTabStateResetterAction('closeLanguageModal', 'languageModal');
+
+addActionHandler('removeCustomLanguage', (global, actions, payload): ActionReturnType => {
+  const { langCode } = payload;
+  const { language, customLanguages } = selectSharedSettings(global);
+  if (language === langCode) return undefined;
+
+  return updateSharedSettings(global, {
+    customLanguages: customLanguages?.filter((customLanguage) => customLanguage.langCode !== langCode),
+  });
+});

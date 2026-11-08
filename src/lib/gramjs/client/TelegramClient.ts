@@ -3,7 +3,8 @@ import type { UpdatePts } from '../../../api/gramjs/updates/UpdatePts';
 import type { AuthKey } from '../crypto/AuthKey';
 import type {
   Connection,
-  UpdateServerTimeOffset } from '../network';
+  UpdateServerTimeOffset,
+  UpdateSessionGap } from '../network';
 import type {
   PasswordResult,
   TmpPasswordResult,
@@ -15,6 +16,7 @@ import type { UploadFileParams } from './uploadFile';
 import Deferred from '../../../util/Deferred';
 import { concat } from '../../../util/encoding/buffer';
 import { toJSNumber } from '../../../util/numbers';
+import { getServerTimeOffset } from '../../../util/serverTime';
 import {
   FloodTestPhoneWaitError,
   FloodWaitError,
@@ -43,6 +45,7 @@ import { authFlow, checkAuthorization } from './auth';
 import { downloadFile } from './downloadFile';
 import { uploadFile } from './uploadFile';
 
+import { PermAuthKeyInvalidError } from '../errors/Common';
 import { generateRandomBigInt, sleep } from '../Helpers';
 import RequestState from '../network/RequestState';
 import Session from '../sessions/Abstract';
@@ -83,7 +86,8 @@ type TimeoutId = number;
 
 export type Update = (
     Api.TypeUpdate | Api.TypeUpdates
-    | UpdateServerTimeOffset | UpdateConnectionState | UpdatePts | LocalUpdatePremiumFloodWait
+    | UpdateServerTimeOffset | UpdateConnectionState | UpdateSessionGap
+    | UpdatePts | LocalUpdatePremiumFloodWait
 ) & { _entities?: (Api.TypeUser | Api.TypeChat)[] };
 type EventBuilder = {
   build: (update: Update) => Update;
@@ -197,6 +201,9 @@ class TelegramClient {
   private _exportedSenderPromises: Record<number, Record<number, Promise<MTProtoSender> | undefined>> = {};
   private _exportedSenderRefCounter: Record<number, Record<number, number>> = {};
   private _waitingForAuthKey: Record<number, Promise<void> | undefined> = {};
+  // Keyed by `dcId` for regular hosts and `-dcId` for media hosts, which only accept temporary keys created for them
+  private _tempAuthKeys: Record<number, AuthKey | undefined> = {};
+  private _tempAuthKeyPromises: Record<number, Promise<AuthKey> | undefined> = {};
   private _exportedSenderReleaseTimeouts: Record<number, Record<number, TimeoutId | undefined>> = {};
   private _loopStarted = false;
   private _isSwitchingDc = false;
@@ -205,6 +212,8 @@ class TelegramClient {
   private pingCallback?: () => Promise<void>;
 
   private _initWith: (x: unknown) => Api.InvokeWithLayer;
+  private _languageAnnouncementPromise = Promise.resolve();
+  private _announcedLangCode?: string;
 
   isPremium = false;
   private _lastRequest = Date.now();
@@ -282,6 +291,18 @@ class TelegramClient {
 
   // region Connecting
 
+  setLanguageCode(langCode: string) {
+    this._args.langCode = langCode;
+    this._languageAnnouncementPromise = this._languageAnnouncementPromise.catch(() => undefined).then(async () => {
+      await this._connectedDeferred.promise;
+      if (this._args.langCode !== langCode || this._announcedLangCode === langCode) return;
+
+      await this._sender!.send(this._initWith(new Api.help.GetConfig()));
+      this._announcedLangCode = langCode;
+    });
+    return this._languageAnnouncementPromise;
+  }
+
   /**
      * Connects to the Telegram servers, executing authentication if required.
      * Note that authenticating to the Telegram servers is not the same as authenticating
@@ -296,6 +317,7 @@ class TelegramClient {
       this._sender = new MTProtoSender(this.session.getAuthKey(), {
         logger: this._log,
         dcId: this.session.dcId,
+        timeOffset: getServerTimeOffset(),
         retries: this._connectionRetries,
         retriesToFallback: this._connectionRetriesToFallback,
         shouldForceHttpTransport: this._shouldForceHttpTransport,
@@ -305,6 +327,9 @@ class TelegramClient {
         autoReconnect: this._autoReconnect,
         connectTimeout: this._timeout,
         authKeyCallback: this._authKeyCallback.bind(this),
+        getTempAuthKey: this._getTempAuthKey.bind(this),
+        dropTempAuthKey: this._dropTempAuthKey.bind(this),
+        initConnection: this._initWith,
         updateCallback: this._handleUpdate.bind(this),
         getShouldDebugExportedSenders: this.getShouldDebugExportedSenders.bind(this),
         isMainSender: true,
@@ -338,9 +363,11 @@ class TelegramClient {
 
     this.session.setAuthKey(this._sender.authKey);
     // `_initWith` is used to announce our API layer to the server
+    const langCode = this._args.langCode;
     await this._sender.send(this._initWith(
       new Api.help.GetConfig(),
     ));
+    this._announcedLangCode = langCode;
 
     if (!this._loopStarted) {
       this._updateLoop();
@@ -363,6 +390,13 @@ class TelegramClient {
       this.session.setDC(
         this.defaultDcId, DC.ipAddress, this._args.useWSS ? 443 : 80, this._args.isTestServerRequested,
       );
+    }
+
+    const { dcId } = this.session;
+    if (dcId in this._tempAuthKeys) {
+      this.session.setTempAuthKey(this._tempAuthKeys[dcId]);
+    } else {
+      this._tempAuthKeys[dcId] = this.session.getTempAuthKey();
     }
   }
 
@@ -482,7 +516,10 @@ class TelegramClient {
     Object.values(this._exportedSenderPromises)
       .forEach((promises) => {
         Object.values(promises).forEach((promise) => {
-          promise?.then((sender) => sender?.disconnect());
+          void promise?.then((sender) => {
+            sender?.disconnect();
+            sender?.destroy();
+          }).catch(() => undefined);
         });
       });
 
@@ -527,7 +564,7 @@ class TelegramClient {
     // authKey's are associated with a server, which has now changed
     // so it's not valid anymore. Set to None to force recreating it.
     await this._sender.authKey.setKey(undefined);
-    this.session.setAuthKey(undefined);
+    this._resetAuthKey(newDc);
     this._isSwitchingDc = true;
     this.disconnect();
     this._sender = undefined;
@@ -538,38 +575,68 @@ class TelegramClient {
     this.session.setAuthKey(authKey, dcId);
   }
 
+  _resetAuthKey(dcId: number) {
+    this.session.setAuthKey(undefined, dcId);
+    this._tempAuthKeyPromises[dcId] = undefined;
+    this._tempAuthKeyPromises[-dcId] = undefined;
+    this._setTempAuthKey(dcId, undefined);
+    this._setTempAuthKey(-dcId, undefined);
+  }
+
+  _getTempAuthKey(clusterId: number, create: () => Promise<AuthKey>, isUsable: (authKey: AuthKey) => boolean) {
+    const pendingAuthKey = this._tempAuthKeyPromises[clusterId];
+    if (pendingAuthKey) return pendingAuthKey;
+
+    const authKey = this._tempAuthKeys[clusterId];
+    if (authKey && isUsable(authKey)) return Promise.resolve(authKey);
+
+    let isReset = false;
+    const creationPromise = create();
+    const promise = creationPromise
+      .then((newAuthKey) => {
+        if (this._tempAuthKeyPromises[clusterId] !== promise) {
+          isReset = true;
+          throw new Error('Temporary auth key was reset');
+        }
+
+        this._setTempAuthKey(clusterId, newAuthKey);
+        return newAuthKey;
+      })
+      .finally(() => {
+        if (this._tempAuthKeyPromises[clusterId] === promise) this._tempAuthKeyPromises[clusterId] = undefined;
+      });
+    this._tempAuthKeyPromises[clusterId] = promise;
+    // The creator's bound key remains usable when a reset invalidates the shared promise
+    return promise.catch((err: unknown) => {
+      if (isReset) return creationPromise;
+      throw err;
+    });
+  }
+
+  _dropTempAuthKey(clusterId: number, keyId: bigint) {
+    if (this._tempAuthKeys[clusterId]?.keyId === keyId) this._setTempAuthKey(clusterId, undefined);
+  }
+
+  _setTempAuthKey(clusterId: number, authKey?: AuthKey) {
+    this._tempAuthKeys[clusterId] = authKey;
+    if (clusterId === this.session.dcId) this.session.setTempAuthKey(authKey);
+  }
+
   // endregion
   // export region
 
   async _cleanupExportedSender(dcId: number, index: number) {
     if (this.session.dcId !== dcId) {
-      this.session.setAuthKey(undefined, dcId);
+      this._resetAuthKey(dcId);
     }
     // eslint-disable-next-line no-console
     if (this._shouldDebugExportedSenders) console.log(`🧹 Cleanup idx=${index} dcId=${dcId}`);
-    const sender = await this._exportedSenderPromises[dcId][index];
+    const senderPromise = this._exportedSenderPromises[dcId][index];
     delete this._exportedSenderPromises[dcId][index];
     delete this._exportedSenderRefCounter[dcId][index];
+    const sender = await senderPromise?.catch(() => undefined);
     sender?.disconnect();
-  }
-
-  async _cleanupExportedSenders(dcId: number) {
-    const promises = Object.values(this._exportedSenderPromises[dcId]);
-    if (!promises.length) {
-      return;
-    }
-
-    if (this.session.dcId !== dcId) {
-      this.session.setAuthKey(undefined, dcId);
-    }
-
-    this._exportedSenderPromises[dcId] = {};
-    this._exportedSenderRefCounter[dcId] = {};
-
-    await Promise.all(promises.map(async (promise) => {
-      const sender = await promise;
-      sender?.disconnect();
-    }));
+    sender?.destroy();
   }
 
   async _connectSender(sender: MTProtoSender, dcId: number, index?: number, isPremium = false) {
@@ -583,9 +650,9 @@ class TelegramClient {
 
         const authKey = this.session.getAuthKey(dcId);
 
-        hasAuthKey = Boolean(sender.authKey?.getKey());
+        hasAuthKey = Boolean(authKey?.getKey());
         if (hasAuthKey) {
-          await sender.authKey.setKey(authKey.getKey());
+          await sender.authKey.setKey(authKey);
         }
       } else {
         this._waitingForAuthKey[dcId] = new Promise((resolve) => {
@@ -594,9 +661,8 @@ class TelegramClient {
       }
     }
 
-    const dc = getDC(dcId, hasAuthKey);
-
     while (true) {
+      const dc = getDC(dcId, hasAuthKey);
       try {
         await sender.connect(new this._connection({
           ip: dc.ipAddress,
@@ -606,6 +672,7 @@ class TelegramClient {
           isTestServer: this.session.isTestServer,
           // Premium DCs are not stable for obtaining auth keys, so need to we first connect to regular ones
           isPremium: hasAuthKey ? isPremium : false,
+          isMediaDc: hasAuthKey,
         }), false, new this._fallbackConnection({
           ip: dc.ipAddress,
           port: dc.port,
@@ -613,6 +680,7 @@ class TelegramClient {
           loggers: this._log,
           isTestServer: this.session.isTestServer,
           isPremium: hasAuthKey ? isPremium : false,
+          isMediaDc: hasAuthKey,
         }));
 
         if (this.session.dcId !== dcId && !sender._authenticated) {
@@ -628,6 +696,9 @@ class TelegramClient {
             await sender.send(req);
             sender._authenticated = true;
           });
+        } else {
+          // Heads the queue, so later requests go out initialized; awaiting it would make its failure the connection's
+          void sender.send(this._initWith(new Api.help.GetConfig()))?.catch(() => undefined);
         }
 
         sender._dcId = dcId;
@@ -645,6 +716,29 @@ class TelegramClient {
 
         return sender;
       } catch (err: any) {
+        if (err instanceof PermAuthKeyInvalidError && this.session.dcId !== dcId) {
+          const pendingAuthKey = this._waitingForAuthKey[dcId];
+          if (pendingAuthKey && !firstConnectResolver) {
+            await pendingAuthKey;
+            const authKey = this.session.getAuthKey(dcId);
+            if (authKey?.getKey() && authKey !== sender.authKey) {
+              await sender.authKey.setKey(authKey);
+            }
+            hasAuthKey = Boolean(sender.authKey.getKey());
+          } else if (sender.authKey.getKey()) {
+            if (!firstConnectResolver) {
+              this._waitingForAuthKey[dcId] = new Promise((resolve) => {
+                firstConnectResolver = resolve;
+              });
+            }
+
+            await sender.authKey.setKey(undefined);
+            this._resetAuthKey(dcId);
+            sender._authenticated = false;
+            hasAuthKey = false;
+          }
+        }
+
         if (this._shouldDebugExportedSenders) {
           // eslint-disable-next-line no-console
           console.error(`☠️ ERROR! idx=${index} dcId=${dcId} ${err.message}`);
@@ -652,13 +746,30 @@ class TelegramClient {
         // eslint-disable-next-line no-console
         console.error(err);
 
+        // A refusal does not go away on a retry, unlike a dropped connection or a server failure
+        if (err instanceof RPCError && !(err instanceof ServerError || err instanceof TimedOutError)) {
+          sender.disconnect();
+
+          if (firstConnectResolver) {
+            firstConnectResolver();
+            delete this._waitingForAuthKey[dcId];
+          }
+          throw err;
+        }
+
         await sleep(1000);
         sender.disconnect();
+        if (err instanceof PermAuthKeyInvalidError && this.session.dcId === dcId) {
+          throw err;
+        }
       }
     }
   }
 
   releaseExportedSender(sender: MTProtoSender) {
+    // Discarded senders no longer own references in the pool
+    if (sender.userDisconnected) return;
+
     const dcId = sender._dcId;
     const index = sender._senderIndex;
 
@@ -674,6 +785,7 @@ class TelegramClient {
         // eslint-disable-next-line no-console
         if (this._shouldDebugExportedSenders) console.log(`[CC] [idx=${index} dcId=${dcId}] 🚪 Release`);
         sender.disconnect();
+        sender.destroy();
         this._exportedSenderReleaseTimeouts[dcId][index] = undefined;
         this._exportedSenderPromises[dcId][index] = undefined;
       }, EXPORTED_SENDER_RELEASE_TIMEOUT);
@@ -682,13 +794,14 @@ class TelegramClient {
 
   async _borrowExportedSender(
     dcId: number, shouldReconnect?: boolean, existingSender?: MTProtoSender, index?: number, isPremium?: boolean,
+    abortSignal?: AbortSignal,
   ): Promise<MTProtoSender> {
+    if (abortSignal?.aborted) throw new Error('Request aborted');
+
     const i = index || 0;
 
-    let shouldAnnounceLayer = false;
     if (!this._exportedSenderPromises[dcId]) {
       this._exportedSenderPromises[dcId] = {};
-      shouldAnnounceLayer = true;
     }
     if (!this._exportedSenderRefCounter[dcId]) this._exportedSenderRefCounter[dcId] = {};
 
@@ -707,23 +820,49 @@ class TelegramClient {
       );
     }
 
+    const senderPromise = this._exportedSenderPromises[dcId][i];
+    const handleAbort = () => {
+      // Another attempt may already have replaced this connection
+      if (this._exportedSenderPromises[dcId]?.[i] !== senderPromise) return;
+      void this._cleanupExportedSender(dcId, i);
+    };
+    abortSignal?.addEventListener('abort', handleAbort, { once: true });
+
     let sender;
     try {
-      sender = await this._exportedSenderPromises[dcId][i];
+      sender = await senderPromise;
+      if (abortSignal?.aborted) throw new Error('Request aborted');
+
+      // A retired connection must not acquire references in its replacement's pool entry
+      if (this._exportedSenderPromises[dcId]?.[i] !== senderPromise) {
+        return this._borrowExportedSender(dcId, false, undefined, i, isPremium, abortSignal);
+      }
 
       if (!sender?.isConnected()) {
         if (sender?.isConnecting) {
           await sleep(EXPORTED_SENDER_RECONNECT_TIMEOUT);
-          return this._borrowExportedSender(dcId, false, sender, i, isPremium);
+          return this._borrowExportedSender(dcId, false, undefined, i, isPremium, abortSignal);
         } else {
-          return this._borrowExportedSender(dcId, true, sender, i, isPremium);
+          return this._borrowExportedSender(dcId, true, sender, i, isPremium, abortSignal);
         }
       }
     } catch (err) {
+      if (abortSignal?.aborted) throw err;
+
       // eslint-disable-next-line no-console
       console.error(err);
 
-      return this._borrowExportedSender(dcId, true, undefined, i, isPremium);
+      const shouldReplace = this._exportedSenderPromises[dcId]?.[i] === senderPromise;
+
+      // A refused sender fails the request instead of reconnecting endlessly; the next borrower starts a fresh one
+      if (err instanceof RPCError) {
+        if (shouldReplace) this._exportedSenderPromises[dcId][i] = undefined;
+        throw err;
+      }
+
+      return this._borrowExportedSender(dcId, shouldReplace, undefined, i, isPremium, abortSignal);
+    } finally {
+      abortSignal?.removeEventListener('abort', handleAbort);
     }
 
     this._exportedSenderRefCounter[dcId][i] += 1;
@@ -731,11 +870,6 @@ class TelegramClient {
     if (this._exportedSenderReleaseTimeouts[dcId][i]) {
       clearTimeout(this._exportedSenderReleaseTimeouts[dcId][i]);
       this._exportedSenderReleaseTimeouts[dcId][i] = undefined;
-    }
-
-    if (shouldAnnounceLayer) {
-      // Dummy request to let DC know about our API layer
-      sender.send(this._initWith(new Api.help.GetConfig()));
     }
 
     return sender;
@@ -746,6 +880,7 @@ class TelegramClient {
       logger: this._log,
       dcId,
       senderIndex: index,
+      timeOffset: getServerTimeOffset(),
       retries: this._connectionRetries,
       retriesToFallback: this._connectionRetriesToFallback,
       delay: this._retryDelay,
@@ -755,6 +890,9 @@ class TelegramClient {
       autoReconnect: this._autoReconnect,
       connectTimeout: this._timeout,
       authKeyCallback: this._authKeyCallback.bind(this),
+      getTempAuthKey: this._getTempAuthKey.bind(this),
+      dropTempAuthKey: this._dropTempAuthKey.bind(this),
+      initConnection: this._initWith,
       isMainSender: dcId === this.session.dcId,
       isExported: true,
       updateCallback: this._handleUpdate.bind(this),
@@ -763,9 +901,9 @@ class TelegramClient {
     });
   }
 
-  getSender(dcId: number, index?: number, isPremium?: boolean) {
+  getSender(dcId: number, index?: number, isPremium?: boolean, abortSignal?: AbortSignal) {
     return dcId
-      ? this._borrowExportedSender(dcId, undefined, undefined, index, isPremium)
+      ? this._borrowExportedSender(dcId, undefined, undefined, index, isPremium, abortSignal)
       : Promise.resolve(this._sender!);
   }
 
@@ -1038,9 +1176,8 @@ class TelegramClient {
           limit: WEBDOCUMENT_REQUEST_PART_SIZE,
         });
 
-        const sender = await this._borrowExportedSender(
-          this._config?.webfileDcId || DEFAULT_WEBDOCUMENT_DC_ID,
-        );
+        const sender = await this._borrowExportedSender(await this.getWebfileDcId());
+
         if (!sender) {
           throw new Error('Failed to obtain sender');
         }
@@ -1058,9 +1195,9 @@ class TelegramClient {
       }
       return concat(...buff);
     } catch (err: unknown) {
-      // the file is no longer saved in telegram's cache.
+      // Nothing is returned, so an empty file is not cached and the next request tries again
       if (err instanceof RPCError && err.errorMessage === 'WEBFILE_NOT_AVAILABLE') {
-        return new Uint8Array(0);
+        return undefined;
       } else {
         throw err;
       }
@@ -1102,9 +1239,8 @@ class TelegramClient {
 
         let sender: MTProtoSender | undefined;
         try {
-          sender = await this._borrowExportedSender(
-            this._config?.webfileDcId || DEFAULT_WEBDOCUMENT_DC_ID,
-          );
+          sender = await this._borrowExportedSender(await this.getWebfileDcId());
+
           if (!sender) {
             throw new Error('Failed to obtain sender');
           }
@@ -1274,6 +1410,13 @@ class TelegramClient {
     if (!this._config) {
       this._config = await this.invoke(new Api.help.GetConfig());
     }
+  }
+
+  // The DC that serves web documents and the Toncenter API proxy
+  async getWebfileDcId() {
+    await this.loadConfig();
+
+    return this._config?.webfileDcId || DEFAULT_WEBDOCUMENT_DC_ID;
   }
 
   async start(authParams: UserAuthParams, onConnected?: NoneToVoidFunction) {

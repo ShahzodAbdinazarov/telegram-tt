@@ -7,14 +7,18 @@ import type {
   ApiPageCaption,
   ApiPageListItem,
   ApiPageListOrderedItem,
+  ApiRichMessage,
   ApiRichText,
 } from '../../api/types';
 import type { ObserveFn } from '../../hooks/useIntersectionObserver';
 import type { ThemeKey, ThreadId } from '../../types';
 
+import { RICH_CONTENT_BODY_FONT_SIZE_PX } from '../../config';
 import { selectChatMessage } from '../../global/selectors';
+import { selectMessageTextSize } from '../../global/selectors/sharedState';
 import buildClassName from '../../util/buildClassName';
 
+import useSelector from '../../hooks/data/useSelector';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 
@@ -25,11 +29,13 @@ import styles from './MessageRichText.module.scss';
 
 type OwnProps = {
   message: ApiMessage;
+  forcedRichMessage?: ApiRichMessage;
   threadId?: ThreadId;
   isOwn?: boolean;
   noAvatars?: boolean;
   canAutoLoadMedia?: boolean;
   isProtected?: boolean;
+  noPlaylist?: boolean;
   theme: ThemeKey;
   observeIntersectionForLoading?: ObserveFn;
   observeIntersectionForPlaying?: ObserveFn;
@@ -39,11 +45,13 @@ const MIN_CUSTOM_EMOJIS_FOR_SHARED_CANVAS = 3;
 
 const MessageRichText = ({
   message,
+  forcedRichMessage,
   threadId,
   isOwn,
   noAvatars,
   canAutoLoadMedia,
   isProtected,
+  noPlaylist,
   theme,
   observeIntersectionForLoading,
   observeIntersectionForPlaying,
@@ -54,13 +62,14 @@ const MessageRichText = ({
   const sharedCanvasHqRef = useRef<HTMLCanvasElement>();
   const [expandedMessageKey, setExpandedMessageKey] = useState<string>();
   const [loadingMessageKey, setLoadingMessageKey] = useState<string>();
+  const messageTextSize = useSelector(selectMessageTextSize);
   const lang = useLang();
 
-  const { richMessage } = message.content;
+  const richMessage = forcedRichMessage || message.content.richMessage;
   const messageKey = `${message.chatId}-${message.id}`;
   const cutoff = richMessage?.partCutoff;
   const hasCutoff = cutoff !== undefined;
-  const isExpanded = expandedMessageKey === messageKey;
+  const isExpanded = expandedMessageKey === messageKey && !richMessage?.isPart;
   const isLoadingFullMessage = loadingMessageKey === messageKey;
   const shouldCollapse = !isExpanded && Boolean(richMessage?.isPart || hasCutoff);
   const shouldSliceBlocks = shouldCollapse && hasCutoff;
@@ -106,7 +115,7 @@ const MessageRichText = ({
   }
 
   return (
-    <div className={styles.root}>
+    <div className={buildClassName(styles.root, isOwn && styles.own)}>
       <div className={shouldCollapse ? styles.collapsedContent : undefined}>
         {withSharedCanvas && <canvas key="shared-canvas" ref={sharedCanvasRef} className="shared-canvas" />}
         {withSharedCanvas && <canvas key="shared-canvas-hq" ref={sharedCanvasHqRef} className="shared-canvas" />}
@@ -117,7 +126,9 @@ const MessageRichText = ({
           noAvatars={noAvatars}
           canAutoLoadMedia={canAutoLoadMedia}
           isProtected={isProtected}
+          noPlaylist={noPlaylist}
           theme={theme}
+          fontSizeAdjust={messageTextSize / RICH_CONTENT_BODY_FONT_SIZE_PX}
           chatId={message.chatId}
           messageId={message.id}
           threadId={threadId}
@@ -174,8 +185,10 @@ function countRichTextCustomEmojis(text: ApiRichText): number {
     case 'autoEmail':
     case 'autoPhone':
     case 'bankCard':
+    case 'tonAddress':
     case 'mentionName':
     case 'date':
+    case 'button':
       return countRichTextCustomEmojis(text.text);
     default:
       return 0;
@@ -190,16 +203,24 @@ function hasPageBlocksSpoileredCustomEmojis(blocks: ApiPageBlock[]): boolean {
   return hasPageBlocksMatchingRichText(blocks, hasRichTextSpoileredCustomEmojis);
 }
 
-function sumPageBlocksMatchingRichText(blocks: ApiPageBlock[], predicate: (text: ApiRichText) => number): number {
+function sumPageBlocksMatchingRichText(
+  blocks: ApiPageBlock[],
+  predicate: (text: ApiRichText) => number,
+): number {
   return blocks.reduce((total, block) => total + sumPageBlockMatchingRichText(block, predicate), 0);
 }
 
-function hasPageBlocksMatchingRichText(blocks: ApiPageBlock[], predicate: (text: ApiRichText) => boolean): boolean {
+function hasPageBlocksMatchingRichText(
+  blocks: ApiPageBlock[],
+  predicate: (text: ApiRichText) => boolean,
+): boolean {
   return blocks.some((block) => hasPageBlockMatchingRichText(block, predicate));
 }
 
 function sumPageBlockMatchingRichText(block: ApiPageBlock, predicate: (text: ApiRichText) => number): number {
   switch (block.type) {
+    case 'buttonRow':
+      return block.buttons.reduce((total, button) => total + predicate(button.text), 0);
     case 'unsupported':
     case 'divider':
     case 'anchor':
@@ -236,6 +257,7 @@ function sumPageBlockMatchingRichText(block: ApiPageBlock, predicate: (text: Api
     case 'video':
     case 'map':
     case 'audio':
+    case 'document':
     case 'embed':
       return sumPageCaptionMatchingRichText(block.caption, predicate);
     case 'cover':
@@ -260,8 +282,13 @@ function sumPageBlockMatchingRichText(block: ApiPageBlock, predicate: (text: Api
   }
 }
 
-function hasPageBlockMatchingRichText(block: ApiPageBlock, predicate: (text: ApiRichText) => boolean): boolean {
+function hasPageBlockMatchingRichText(
+  block: ApiPageBlock,
+  predicate: (text: ApiRichText) => boolean,
+): boolean {
   switch (block.type) {
+    case 'buttonRow':
+      return block.buttons.some((button) => predicate(button.text));
     case 'unsupported':
     case 'divider':
     case 'anchor':
@@ -299,6 +326,7 @@ function hasPageBlockMatchingRichText(block: ApiPageBlock, predicate: (text: Api
     case 'video':
     case 'map':
     case 'audio':
+    case 'document':
     case 'embed':
       return hasPageCaptionMatchingRichText(block.caption, predicate);
     case 'cover':
@@ -321,11 +349,17 @@ function hasPageBlockMatchingRichText(block: ApiPageBlock, predicate: (text: Api
   }
 }
 
-function hasPageCaptionMatchingRichText(caption: ApiPageCaption, predicate: (text: ApiRichText) => boolean): boolean {
+function hasPageCaptionMatchingRichText(
+  caption: ApiPageCaption,
+  predicate: (text: ApiRichText) => boolean,
+): boolean {
   return predicate(caption.text) || predicate(caption.credit);
 }
 
-function sumPageCaptionMatchingRichText(caption: ApiPageCaption, predicate: (text: ApiRichText) => number): number {
+function sumPageCaptionMatchingRichText(
+  caption: ApiPageCaption,
+  predicate: (text: ApiRichText) => number,
+): number {
   return predicate(caption.text) + predicate(caption.credit);
 }
 
@@ -377,6 +411,7 @@ function hasRichTextSpoileredCustomEmojis(text: ApiRichText): boolean {
     case 'autoEmail':
     case 'autoPhone':
     case 'bankCard':
+    case 'tonAddress':
     case 'mentionName':
     case 'date':
       return hasRichTextSpoileredCustomEmojis(text.text);

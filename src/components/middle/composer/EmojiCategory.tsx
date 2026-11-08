@@ -1,17 +1,16 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo, useRef } from '../../../lib/teact/teact';
 
 import type { ObserveFn } from '../../../hooks/useIntersectionObserver';
 
-import { EMOJI_SIZE_PICKER, RECENT_SYMBOL_SET_ID } from '../../../config';
+import { EMOJI_SIZE_PICKER } from '../../../config';
 import buildClassName from '../../../util/buildClassName';
 import windowSize from '../../../util/windowSize';
 import { REM } from '../../common/helpers/mediaDimensions';
 
 import useAppLayout from '../../../hooks/useAppLayout';
-import { useOnIntersect } from '../../../hooks/useIntersectionObserver';
+import { useIsIntersecting } from '../../../hooks/useIntersectionObserver';
+import useLang from '../../../hooks/useLang';
 import useMediaTransitionDeprecated from '../../../hooks/useMediaTransitionDeprecated';
-import useOldLang from '../../../hooks/useOldLang';
 
 import EmojiButton from './EmojiButton';
 
@@ -23,23 +22,25 @@ const MOBILE_CONTAINER_PADDING = 0.5 * REM;
 
 type OwnProps = {
   category: EmojiCategory;
-  index: number;
+  sectionId: string;
+  title: string;
   allEmojis: AllEmojis;
   observeIntersection: ObserveFn;
   shouldRender: boolean;
   onEmojiSelect: (emoji: string, name: string) => void;
 };
 
-const EmojiCategory: FC<OwnProps> = ({
-  category, index, allEmojis, observeIntersection, shouldRender, onEmojiSelect,
-}) => {
+const EmojiCategory = ({
+  category, sectionId, title, allEmojis, observeIntersection, shouldRender, onEmojiSelect,
+}: OwnProps) => {
   const ref = useRef<HTMLDivElement>();
 
-  useOnIntersect(ref, observeIntersection);
+  const isIntersecting = useIsIntersecting(ref, observeIntersection);
+  const shouldRenderContent = shouldRender || isIntersecting;
 
-  const transitionClassNames = useMediaTransitionDeprecated(shouldRender);
+  const transitionClassNames = useMediaTransitionDeprecated(shouldRenderContent);
 
-  const lang = useOldLang();
+  const lang = useLang();
   const { isMobile } = useAppLayout();
 
   const emojisPerRow = isMobile
@@ -54,12 +55,12 @@ const EmojiCategory: FC<OwnProps> = ({
     <div
       ref={ref}
       key={category.id}
-      id={`emoji-category-${index}`}
+      id={sectionId}
       className="symbol-set"
     >
       <div className="symbol-set-header">
         <p className="symbol-set-name" dir="auto">
-          {lang(category.id === RECENT_SYMBOL_SET_ID ? 'RecentStickers' : `Emoji${index}`)}
+          {title}
         </p>
       </div>
       <div
@@ -67,7 +68,7 @@ const EmojiCategory: FC<OwnProps> = ({
         style={`height: ${height}px;`}
         dir={lang.isRtl ? 'rtl' : undefined}
       >
-        {shouldRender && category.emojis.map((name) => {
+        {shouldRenderContent && category.emojis.map((name) => {
           const emoji = allEmojis[name];
           // Recent emojis may contain emoticons that are no longer in the list
           if (!emoji) {

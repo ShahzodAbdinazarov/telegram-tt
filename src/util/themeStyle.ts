@@ -1,10 +1,10 @@
-import Color from 'colorjs.io';
-
 import type { ApiThemeParameters } from '../api/types';
+
+import { buildColor, mapColorToGamut, serializeColor } from '../lib/color';
 
 const HEX_COLOR_LENGTH = 7;
 
-const FALLBACK_THEME_PARAMS: ApiThemeParameters = {
+export const FALLBACK_THEME_PARAMS: ApiThemeParameters = {
   bg_color: '#ffffff',
   text_color: '#000000',
   hint_color: '#707579',
@@ -76,9 +76,9 @@ export function getPropertyHexColor(style: CSSStyleDeclaration, property: string
 
 export function prepareHexColor(color: string) {
   try {
-    return new Color(color)
-      .toGamut({ space: 'srgb', method: 'clip' })
-      .toString({ format: 'hex', collapse: false, alpha: false });
+    return serializeColor(mapColorToGamut(buildColor(color), { space: 'srgb', method: 'clip' }), {
+      format: 'hex', collapse: false, alpha: false,
+    });
   } catch {
     return undefined;
   }

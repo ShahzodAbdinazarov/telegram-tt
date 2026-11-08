@@ -3,7 +3,7 @@ import { getActions } from '../../../global';
 
 import type { ApiMessage, ApiMessageWebPage, ApiTypeStory, ApiWebPage, ApiWebPageFull } from '../../../api/types';
 import type { ObserveFn } from '../../../hooks/useIntersectionObserver';
-import { AudioOrigin, type ThemeKey, type WebPageMediaSize } from '../../../types';
+import type { ThemeKey, WebPageMediaSize } from '../../../types';
 
 import { getPhotoFullDimensions } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
@@ -49,7 +49,6 @@ type OwnProps = {
   noAvatars?: boolean;
   canAutoLoad?: boolean;
   canAutoPlay?: boolean;
-  asForwarded?: boolean;
   isDownloading?: boolean;
   isProtected?: boolean;
   isConnected?: boolean;
@@ -75,7 +74,6 @@ const WebPage = ({
   noAvatars,
   canAutoLoad,
   canAutoPlay,
-  asForwarded,
   isDownloading = false,
   isProtected,
   isConnected,
@@ -93,7 +91,7 @@ const WebPage = ({
   onAudioPlay,
   onCancelMediaTransfer,
 }: OwnProps) => {
-  const { openInstantView, openUrl, openTelegramLink } = getActions();
+  const { openBrowserTab, openUrl, openTelegramLink } = getActions();
   const stickersRef = useRef<HTMLDivElement>();
 
   const lang = useLang();
@@ -124,7 +122,15 @@ const WebPage = ({
 
   const handleArticleClick = useLastCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    openUrl({ url: webPage.url!, shouldSkipModal: messageWebPage.isSafe });
+    // The nested site-name `SafeLink` handles its own clicks (including modifier clicks)
+    if ((e.target as HTMLElement).closest('a')) return;
+
+    openUrl({
+      url: webPage.url!,
+      shouldSkipModal: messageWebPage.isSafe,
+      tryInstant: Boolean(cachedPage),
+      previewId: webPage.id,
+    });
   });
 
   const handleOpenTelegramLink = useLastCallback(() => {
@@ -135,7 +141,7 @@ const WebPage = ({
 
   const handleQuickButtonClick = useLastCallback(() => {
     if (cachedPage) {
-      openInstantView({ webPageId: webPage.id });
+      openBrowserTab({ tab: { type: 'instantView', webPageId: webPage.id } });
       return;
     }
 
@@ -178,7 +184,8 @@ const WebPage = ({
   if (isArticle && webPage?.photo && !webPage.video && !webPage.document) {
     isSquarePhoto = getIsSmallPhoto(webPage, mediaSize);
   }
-  const isMediaInteractive = (photo || video) && onMediaClick && !isSquarePhoto;
+  const hasWideMedia = Boolean((photo || video) && !isSquarePhoto);
+  const isMediaInteractive = hasWideMedia && Boolean(onMediaClick);
 
   const className = buildClassName(
     'WebPage',
@@ -218,6 +225,8 @@ const WebPage = ({
     >
       <div className={buildClassName(
         'WebPage--content',
+        hasWideMedia && 'has-adaptive-width',
+        hasWideMedia && 'with-wide-media',
         isStory && 'is-story',
         (isGift || isAuction) && 'is-gift',
       )}
@@ -252,7 +261,14 @@ const WebPage = ({
             className={buildClassName('WebPage-text', 'WebPage-text_interactive')}
             onClick={handleArticleClick}
           >
-            <SafeLink className="site-name" url={url} text={siteName || displayUrl} />
+            <SafeLink
+              className="site-name"
+              url={url}
+              text={siteName || displayUrl}
+              shouldSkipModal={messageWebPage.isSafe}
+              tryInstantView={Boolean(cachedPage)}
+              previewId={webPage.id}
+            />
             {title && (
               <p className="site-title">{renderText(title)}</p>
             )}
@@ -264,13 +280,9 @@ const WebPage = ({
         {photo && !isGift && !isAuction && !video && (
           <Photo
             photo={photo}
-            isOwn={message?.isOutgoing}
-            isNestedMedia
             observeIntersection={observeIntersectionForLoading}
-            noAvatars={noAvatars}
             canAutoLoad={canAutoLoad}
             size={isSquarePhoto ? 'pictogram' : 'inline'}
-            asForwarded={asForwarded}
             nonInteractive={!isMediaInteractive}
             isDownloading={isDownloading}
             isProtected={isProtected}
@@ -282,13 +294,9 @@ const WebPage = ({
         {video && (
           <Video
             video={video}
-            isOwn={message?.isOutgoing}
-            isNestedMedia
             observeIntersectionForLoading={observeIntersectionForLoading}
-            noAvatars={noAvatars}
             canAutoLoad={canAutoLoad}
             canAutoPlay={canAutoPlay}
-            asForwarded={asForwarded}
             isDownloading={isDownloading}
             isProtected={isProtected}
             lastPlaybackTimestamp={lastPlaybackTimestamp || linkTimestamp}
@@ -300,7 +308,8 @@ const WebPage = ({
           <Audio
             theme={theme}
             message={message!}
-            origin={AudioOrigin.Inline}
+            variant="inline"
+            noPlaylist
             noAvatars={noAvatars}
             isDownloading={isDownloading}
             onPlay={onAudioPlay}

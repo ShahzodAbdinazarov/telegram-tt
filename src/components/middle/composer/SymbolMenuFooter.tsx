@@ -1,10 +1,10 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo } from '../../../lib/teact/teact';
+
+import type { RegularLangKey } from '../../../types/language';
 
 import buildClassName from '../../../util/buildClassName';
 
-import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
+import useLang from '../../../hooks/useLang';
 
 import Button from '../../ui/Button';
 
@@ -12,38 +12,32 @@ type OwnProps = {
   activeTab: SymbolMenuTabs;
   onSwitchTab: (tab: SymbolMenuTabs) => void;
   onRemoveSymbol: () => void;
-  onSearchOpen: (type: 'stickers' | 'gifs') => void;
   isAttachmentModal?: boolean;
   canSendPlainText?: boolean;
-  canSearch?: boolean;
 };
 
 export enum SymbolMenuTabs {
   Emoji,
-  CustomEmoji,
   Stickers,
   GIFs,
 }
 
-export const SYMBOL_MENU_TAB_TITLES: Record<SymbolMenuTabs, string> = {
+export const SYMBOL_MENU_TAB_TITLES: Record<SymbolMenuTabs, RegularLangKey> = {
   [SymbolMenuTabs.Emoji]: 'Emoji',
-  [SymbolMenuTabs.CustomEmoji]: 'StickersList.EmojiItem',
   [SymbolMenuTabs.Stickers]: 'AccDescrStickers',
-  [SymbolMenuTabs.GIFs]: 'GifsTab',
+  [SymbolMenuTabs.GIFs]: 'GifsTab2',
 };
 
 const SYMBOL_MENU_TAB_ICONS = {
   [SymbolMenuTabs.Emoji]: 'icon-smile',
-  [SymbolMenuTabs.CustomEmoji]: 'icon-favorite',
   [SymbolMenuTabs.Stickers]: 'icon-stickers',
   [SymbolMenuTabs.GIFs]: 'icon-gifs',
 };
 
-const SymbolMenuFooter: FC<OwnProps> = ({
-  activeTab, onSwitchTab, onRemoveSymbol, onSearchOpen, isAttachmentModal,
-  canSendPlainText, canSearch,
-}) => {
-  const lang = useOldLang();
+const SymbolMenuFooter = ({
+  activeTab, onSwitchTab, onRemoveSymbol, isAttachmentModal, canSendPlainText,
+}: OwnProps) => {
+  const lang = useLang();
 
   function renderTabButton(tab: SymbolMenuTabs) {
     return (
@@ -61,38 +55,21 @@ const SymbolMenuFooter: FC<OwnProps> = ({
     );
   }
 
-  const handleSearchOpen = useLastCallback(() => {
-    onSearchOpen(activeTab === SymbolMenuTabs.Stickers ? 'stickers' : 'gifs');
-  });
-
   function stopPropagation(event: any) {
     event.stopPropagation();
   }
 
   return (
     <div className="SymbolMenu-footer" onClick={stopPropagation} dir={lang.isRtl ? 'rtl' : undefined}>
-      {activeTab !== SymbolMenuTabs.Emoji && activeTab !== SymbolMenuTabs.CustomEmoji && canSearch && (
-        <Button
-          className="symbol-search-button"
-          ariaLabel={activeTab === SymbolMenuTabs.Stickers ? 'Search Stickers' : 'Search GIFs'}
-          round
-          faded
-          color="translucent"
-          onClick={handleSearchOpen}
-          iconName="search"
-        />
-      )}
-
       {canSendPlainText && renderTabButton(SymbolMenuTabs.Emoji)}
-      {canSendPlainText && renderTabButton(SymbolMenuTabs.CustomEmoji)}
       {!isAttachmentModal && renderTabButton(SymbolMenuTabs.Stickers)}
       {!isAttachmentModal && renderTabButton(SymbolMenuTabs.GIFs)}
 
-      {(activeTab === SymbolMenuTabs.Emoji || activeTab === SymbolMenuTabs.CustomEmoji) && (
+      {activeTab === SymbolMenuTabs.Emoji && (
         <Button
           className="symbol-delete-button"
           onClick={onRemoveSymbol}
-          ariaLabel="Remove Symbol"
+          ariaLabel={lang('RemoveSymbol')}
           round
           faded
           color="translucent"

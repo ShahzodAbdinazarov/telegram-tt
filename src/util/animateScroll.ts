@@ -29,10 +29,12 @@ export type AnimateScrollArgs = {
   forceDuration?: number;
   forceNormalContainerHeight?: boolean;
   shouldReturnMutationFn?: boolean;
+  noHeavyAnimation?: boolean;
 };
 
 let isAnimating = false;
 let currentArgs: AnimateScrollArgs | undefined;
+let activeArgs: AnimateScrollArgs | undefined;
 let onHeavyAnimationEnd: NoneToVoidFunction | undefined;
 
 export default function animateScroll(args: AnimateScrollArgs) {
@@ -48,14 +50,25 @@ export default function animateScroll(args: AnimateScrollArgs) {
 }
 
 export function restartCurrentScrollAnimation() {
-  if (!isAnimating) {
+  if (!isAnimating || !activeArgs) {
     return;
   }
 
-  cancelSingleAnimation();
+  const args = activeArgs;
 
   requestMeasure(() => {
-    requestMutation(createMutateFunction(currentArgs!));
+    if (!isAnimating || activeArgs !== args) {
+      return;
+    }
+
+    cancelSingleAnimation();
+    const mutate = createMutateFunction(args);
+    requestMutation(() => {
+      if (activeArgs !== args) {
+        return;
+      }
+      mutate();
+    });
   });
 }
 
@@ -70,6 +83,7 @@ function createMutateFunction(args: AnimateScrollArgs) {
     maxDistance = SCROLL_MAX_DISTANCE,
     forceDirection,
     forceNormalContainerHeight,
+    noHeavyAnimation,
   } = args;
 
   let forceDuration = args.forceDuration;
@@ -128,6 +142,15 @@ function createMutateFunction(args: AnimateScrollArgs) {
         container.scrollTop = scrollFrom;
       }
 
+      if (isAnimating && activeArgs?.container === container) {
+        cancelSingleAnimation();
+        isAnimating = false;
+        currentArgs = undefined;
+        releaseAnimatingContainer(container);
+        onHeavyAnimationEnd?.();
+        onHeavyAnimationEnd = undefined;
+      }
+
       return;
     }
 
@@ -145,14 +168,24 @@ function createMutateFunction(args: AnimateScrollArgs) {
     );
     const startAt = Date.now();
 
+    const activeContainer = activeArgs?.container;
+    if (activeContainer && activeContainer !== container) {
+      // The superseded animation's loop is cancelled by `animateSingle` below and never
+      // runs its own cleanup — restore that container's snap before taking over
+      setExtraStyles(activeContainer, {
+        scrollSnapType: '',
+      });
+    }
+
     isAnimating = true;
+    activeArgs = args;
 
     setExtraStyles(container, {
       scrollSnapType: 'none',
     });
 
     const prevOnHeavyAnimationEnd = onHeavyAnimationEnd;
-    onHeavyAnimationEnd = beginHeavyAnimation(undefined, true);
+    onHeavyAnimationEnd = noHeavyAnimation ? undefined : beginHeavyAnimation(undefined, true);
     prevOnHeavyAnimationEnd?.();
 
     animateSingle(() => {
@@ -166,9 +199,7 @@ function createMutateFunction(args: AnimateScrollArgs) {
 
       if (!isAnimating) {
         currentArgs = undefined;
-        setExtraStyles(container, {
-          scrollSnapType: '',
-        });
+        releaseAnimatingContainer(container);
 
         onHeavyAnimationEnd?.();
         onHeavyAnimationEnd = undefined;
@@ -179,19 +210,32 @@ function createMutateFunction(args: AnimateScrollArgs) {
   };
 }
 
-export function isAnimatingScroll() {
-  return isAnimating;
+export function isAnimatingScroll(container?: HTMLElement) {
+  if (!isAnimating) return false;
+  return !container || activeArgs?.container === container;
 }
 
 export function cancelScrollBlockingAnimation() {
-  if (currentArgs?.container) {
-    setExtraStyles(currentArgs.container, {
+  if (isAnimating) {
+    cancelSingleAnimation();
+  }
+  isAnimating = false;
+  releaseAnimatingContainer(currentArgs?.container);
+  currentArgs = undefined;
+
+  onHeavyAnimationEnd?.();
+  onHeavyAnimationEnd = undefined;
+}
+
+function releaseAnimatingContainer(fallbackContainer?: HTMLElement) {
+  const container = activeArgs?.container ?? fallbackContainer;
+  if (container) {
+    setExtraStyles(container, {
       scrollSnapType: '',
     });
   }
 
-  onHeavyAnimationEnd?.();
-  onHeavyAnimationEnd = undefined;
+  activeArgs = undefined;
 }
 
 function calculateScrollFrom(

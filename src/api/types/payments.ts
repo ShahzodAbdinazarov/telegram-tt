@@ -370,6 +370,8 @@ export type ApiInputInvoiceStarGiftResale = {
   slug: string;
   peerId: string;
   currency: typeof TON_CURRENCY_CODE | typeof STARS_CURRENCY_CODE;
+  shouldShowName?: true;
+  message?: ApiFormattedText;
 };
 
 export type ApiInputInvoiceStarsGiveaway = {
@@ -481,6 +483,8 @@ export type ApiRequestInputInvoiceStarGiftResale = {
   slug: string;
   peer: ApiPeer;
   currency: typeof TON_CURRENCY_CODE | typeof STARS_CURRENCY_CODE;
+  shouldShowName?: true;
+  message?: ApiFormattedText;
 };
 
 export type ApiRequestInputInvoiceChatInviteSubscription = {
@@ -544,4 +548,10 @@ export interface ApiUniqueStarGiftValueInfo {
   listedCount?: number;
   fragmentListedCount?: number;
   fragmentListedUrl?: string;
+}
+
+export interface ApiCurrencyRate {
+  currency: string;
+  // Ratio to USD, which itself always comes as `1`
+  rate: number;
 }

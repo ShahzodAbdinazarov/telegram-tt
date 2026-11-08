@@ -2,14 +2,14 @@ import type { ApiUser } from '../../../api/types';
 import type { ActionReturnType } from '../../types';
 import { ManagementProgress } from '../../../types';
 
-import { BOT_VERIFICATION_PEERS_LIMIT } from '../../../config';
+import { BOT_VERIFICATION_PEERS_LIMIT, SAVED_MUSIC_SLICE } from '../../../config';
 import { isUserId } from '../../../util/entities/ids';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { buildCollectionByKey, unique } from '../../../util/iteratees';
-import * as langProvider from '../../../util/oldLangProvider';
-import { throttle } from '../../../util/schedulers';
 import { callApi } from '../../../api/gramjs';
-import { addActionHandler, getGlobal, setGlobal } from '../../index';
+import {
+  addActionHandler, getActions, getGlobal, setGlobal,
+} from '../../index';
 import {
   addUserStatuses,
   closeNewContactDialog,
@@ -22,8 +22,7 @@ import {
   updateUserCommonChats,
   updateUserFullInfo,
   updateUsers,
-  updateUserSearch,
-  updateUserSearchFetchingStatus,
+  updateUserSavedMusic,
 } from '../../reducers';
 import { updateTabState } from '../../reducers/tabs';
 import {
@@ -34,14 +33,14 @@ import {
   selectIsCurrentUserPremium,
   selectPeer,
   selectPeerPhotos,
-  selectTabState,
   selectUser,
   selectUserCommonChats,
   selectUserFullInfo,
+  selectUserSavedMusic,
 } from '../../selectors';
+import { selectPlaybackSource } from '../../selectors/audioPlayer';
 
 const PROFILE_PHOTOS_FIRST_LOAD_LIMIT = 10;
-const runThrottledForSearch = throttle((cb) => cb(), 500, false);
 
 addActionHandler('loadFullUser', async (global, actions, payload): Promise<void> => {
   const { userId, withPhotos } = payload;
@@ -159,13 +158,90 @@ addActionHandler('loadCommonChats', async (global, actions, payload): Promise<vo
 
   global = getGlobal();
   global = updateUserCommonChats(global, user.id, {
-    maxId: chatIds.length ? chatIds[chatIds.length - 1] : undefined,
+    maxId: chatIds.length ? chatIds[chatIds.length - 1] : commonChats?.maxId,
     ids,
-    isFullyLoaded: ids.length >= count,
+    isFullyLoaded: ids.length >= count || !chatIds.length,
   });
 
   setGlobal(global);
 });
+
+addActionHandler('loadSavedMusic', async (global, actions, payload): Promise<void> => {
+  const { userId, tabId = getCurrentTabId() } = payload;
+
+  const savedMusic = selectUserSavedMusic(global, userId);
+  if (savedMusic?.isLoading) {
+    return;
+  }
+
+  const user = selectUser(global, userId);
+  if (!user) {
+    global = updateUserSavedMusic(global, userId, {
+      byId: {}, ids: [], count: 0, isFullyLoaded: false, isLoaded: true,
+    });
+    setGlobal(global);
+    settlePlayerStepForSavedMusic(userId, tabId, false);
+    return;
+  }
+  if (savedMusic?.isFullyLoaded) {
+    settlePlayerStepForSavedMusic(userId, tabId, false);
+    return;
+  }
+
+  global = updateUserSavedMusic(global, userId, {
+    byId: savedMusic?.byId || {},
+    ids: savedMusic?.ids || [],
+    count: savedMusic?.count || 0,
+    isFullyLoaded: false,
+    isLoading: true,
+    isLoaded: savedMusic?.isLoaded,
+  });
+  setGlobal(global);
+
+  const result = await callApi('fetchSavedMusic', {
+    user,
+    offset: savedMusic?.ids.length || 0,
+    limit: SAVED_MUSIC_SLICE,
+  });
+  global = getGlobal();
+  const latestSavedMusic = selectUserSavedMusic(global, userId);
+
+  if (!result) {
+    global = updateUserSavedMusic(global, userId, { ...latestSavedMusic!, isLoading: false, isLoaded: true });
+    setGlobal(global);
+    settlePlayerStepForSavedMusic(userId, tabId, false);
+    return;
+  }
+
+  const { audios, count } = result;
+
+  const prevIds = latestSavedMusic?.ids || [];
+  const ids = unique(prevIds.concat(audios.map(({ id }) => id)));
+
+  global = updateUserSavedMusic(global, userId, {
+    byId: { ...latestSavedMusic?.byId, ...buildCollectionByKey(audios, 'id') },
+    ids,
+    count,
+    isFullyLoaded: ids.length === prevIds.length || ids.length >= count,
+    isLoaded: true,
+  });
+  setGlobal(global);
+
+  global = getGlobal();
+  const source = selectPlaybackSource(global, tabId);
+  if (source?.type === 'savedMusic' && source.peerId === userId && global.audioPlayer.orderMode === 'shuffle') {
+    actions.loadShufflePlaylist({ tabId });
+  }
+  settlePlayerStepForSavedMusic(userId, tabId, true);
+});
+
+function settlePlayerStepForSavedMusic(userId: string, tabId: number, shouldContinue: boolean) {
+  const global = getGlobal();
+  const source = selectPlaybackSource(global, tabId);
+  if (source?.type !== 'savedMusic' || source.peerId !== userId) return;
+
+  getActions().settlePendingPlaylistStep({ shouldContinue, tabId });
+}
 
 addActionHandler('toggleNoPaidMessagesException', async (global, actions, payload): Promise<void> => {
   const { userId, shouldRefundCharged } = payload;
@@ -284,6 +360,17 @@ addActionHandler('updateContactNote', async (global, actions, payload): Promise<
   setGlobal(global);
 });
 
+addActionHandler('suggestBirthday', async (global, actions, payload): Promise<void> => {
+  const { userId, birthday } = payload;
+
+  const user = selectUser(global, userId);
+  if (!user) {
+    return;
+  }
+
+  await callApi('suggestBirthday', { user, birthday });
+});
+
 addActionHandler('deleteContact', async (global, actions, payload): Promise<void> => {
   const { userId } = payload;
 
@@ -375,37 +462,6 @@ addActionHandler('loadMoreProfilePhotos', async (global, actions, payload): Prom
   setGlobal(global);
 });
 
-addActionHandler('setUserSearchQuery', (global, actions, payload): ActionReturnType => {
-  const { query, tabId = getCurrentTabId() } = payload;
-
-  if (!query) return;
-
-  void runThrottledForSearch(async () => {
-    const result = await callApi('searchChats', { query });
-
-    global = getGlobal();
-    const currentSearchQuery = selectTabState(global, tabId).userSearch.query;
-
-    if (!result || !currentSearchQuery || (query !== currentSearchQuery)) {
-      global = updateUserSearchFetchingStatus(global, false, tabId);
-      setGlobal(global);
-      return;
-    }
-
-    const {
-      accountResultIds, globalResultIds,
-    } = result;
-
-    const localUserIds = accountResultIds.filter(isUserId);
-    const globalUserIds = globalResultIds.filter(isUserId);
-
-    global = updateUserSearchFetchingStatus(global, false, tabId);
-    global = updateUserSearch(global, { localUserIds, globalUserIds }, tabId);
-
-    setGlobal(global);
-  });
-});
-
 addActionHandler('importContact', async (global, actions, payload): Promise<void> => {
   const {
     phoneNumber: phone, firstName, lastName,
@@ -415,7 +471,10 @@ addActionHandler('importContact', async (global, actions, payload): Promise<void
   const result = await callApi('importContact', { phone, firstName, lastName });
   if (!result) {
     actions.showNotification({
-      message: langProvider.oldTranslate('Contacts.PhoneNumber.NotRegistred'),
+      message: {
+        key: 'ContactsPhoneNumberNotRegistred',
+        options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+      },
       tabId,
     });
 
@@ -429,14 +488,23 @@ addActionHandler('importContact', async (global, actions, payload): Promise<void
   setGlobal(global);
 });
 
-addActionHandler('reportSpam', (global, actions, payload): ActionReturnType => {
-  const { chatId } = payload;
+addActionHandler('reportSpam', async (global, actions, payload): Promise<void> => {
+  const { chatId, tabId = getCurrentTabId() } = payload;
   const peer = selectPeer(global, chatId);
   if (!peer) {
     return;
   }
 
-  void callApi('reportSpam', peer);
+  const result = await callApi('reportSpam', peer);
+  if (!result) return;
+
+  actions.showNotification({
+    message: {
+      key: 'ReportPeerAlertSuccess',
+      options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+    },
+    tabId,
+  });
 });
 
 addActionHandler('setEmojiStatus', async (global, actions, payload): Promise<void> => {

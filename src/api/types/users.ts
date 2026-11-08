@@ -1,7 +1,7 @@
 import type { API_CHAT_TYPES } from '../../config';
 import type { ApiBotInfo } from './bots';
 import type { ApiBusinessIntro, ApiBusinessLocation, ApiBusinessWorkHours } from './business';
-import type { ApiDocument, ApiFormattedText, ApiPhoto } from './messages';
+import type { ApiAudio, ApiDocument, ApiFormattedText, ApiPhoto } from './messages';
 import type {
   ApiBotVerification,
   ApiEmojiStatusType,
@@ -11,6 +11,7 @@ import type {
   ApiTypePeerColor,
 } from './peers';
 import type { ApiSavedStarGift, ApiStarsRating } from './stars';
+import type { ApiWalletCard } from './wallet';
 
 export interface ApiUser {
   id: string;
@@ -32,7 +33,7 @@ export interface ApiUser {
   hasVideoAvatar?: boolean;
   avatarPhotoId?: string;
   botPlaceholder?: string;
-  canBeInvitedToGroup?: boolean;
+  canBotBeInvitedToGroup?: boolean;
   fakeType?: ApiFakeType;
   isAttachBot?: boolean;
   emojiStatus?: ApiEmojiStatusType;
@@ -49,12 +50,14 @@ export interface ApiUser {
   paidMessagesStars?: number;
   isBotForum?: boolean;
   canManageBotForumTopics?: boolean;
+  canManageBots?: boolean;
   isGuestChatBot?: boolean;
   isGuardBot?: boolean;
 }
 
 export interface ApiUserFullInfo {
   isBlocked?: boolean;
+  ttlPeriod?: number;
   bio?: string;
   commonChatsCount?: number;
   pinnedMessageId?: number;
@@ -72,6 +75,7 @@ export interface ApiUserFullInfo {
   birthday?: ApiBirthday;
   personalChannelId?: string;
   personalChannelMessageId?: number;
+  privateForwardName?: string;
   businessLocation?: ApiBusinessLocation;
   businessWorkHours?: ApiBusinessWorkHours;
   businessIntro?: ApiBusinessIntro;
@@ -86,10 +90,13 @@ export interface ApiUserFullInfo {
   paidMessagesStars?: number;
   settings?: ApiPeerSettings;
   mainTab?: ApiProfileTab;
+  savedMusic?: ApiAudio;
   note?: ApiFormattedText;
   noForwardsMyEnabled?: boolean;
   noForwardsPeerEnabled?: boolean;
   isUnofficialSecurityRisk?: boolean;
+  botManagerId?: string;
+  walletCard?: ApiWalletCard;
 }
 
 export type ApiUserType = 'userTypeBot' | 'userTypeRegular' | 'userTypeDeleted' | 'userTypeUnknown';
@@ -109,6 +116,15 @@ export interface ApiUserCommonChats {
   ids: string[];
   maxId?: string;
   isFullyLoaded: boolean;
+}
+
+export interface ApiUserSavedMusic {
+  byId: Record<string, ApiAudio>;
+  ids: string[];
+  count: number;
+  isFullyLoaded: boolean;
+  isLoading?: boolean;
+  isLoaded?: boolean;
 }
 
 export interface ApiSavedGifts {

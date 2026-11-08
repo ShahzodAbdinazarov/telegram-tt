@@ -22,13 +22,27 @@ export type WebPageRepairInfo = {
   url: string;
 };
 
+export type SavedMusicRepairInfo = {
+  type: 'savedMusic';
+  peerId: string;
+};
+
+export type InlineBotRepairInfo = {
+  type: 'inlineBot';
+  botId: string;
+  peerId: string;
+  query: string;
+  offset?: string;
+};
+
 export type RepairInfo = {
-  localRepairInfo?: StoryRepairInfo | MessageRepairInfo | WebPageRepairInfo;
+  localRepairInfo?: StoryRepairInfo | MessageRepairInfo | WebPageRepairInfo | SavedMusicRepairInfo
+    | InlineBotRepairInfo;
 };
 
 export interface LocalDb {
   // Used for loading avatars and media through in-memory Gram JS instances.
-  chats: Record<string, GramJs.Chat | GramJs.Channel>;
+  chats: Record<string, GramJs.Chat | GramJs.Channel | GramJs.Community | GramJs.CommunityForbidden>;
   users: Record<string, GramJs.User>;
   documents: Record<string, GramJs.Document & RepairInfo>;
   stickerSets: Record<string, GramJs.StickerSet>;

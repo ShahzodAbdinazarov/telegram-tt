@@ -1,22 +1,23 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo } from '../../../lib/teact/teact';
 import { getActions } from '../../../global';
 
 import type { ApiMessage } from '../../../api/types';
 
-import { getMessageInvoice } from '../../../global/helpers';
+import { getMediaDimensions, getMessageInvoice } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
-import { formatMediaDuration } from '../../../util/dates/oldDateFormat';
+import buildStyle from '../../../util/buildStyle';
+import { formatMediaDuration } from '../../../util/dates/duration';
 import { formatCurrencyAsString } from '../../../util/formatCurrency';
 
 import useInterval from '../../../hooks/schedulers/useInterval';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
 import Icon from '../../common/icons/Icon';
 import MediaSpoiler from '../../common/MediaSpoiler';
 
 import styles from './InvoiceMediaPreview.module.scss';
+import mediaStyles from './media.module.scss';
 
 type OwnProps = {
   message: ApiMessage;
@@ -25,12 +26,12 @@ type OwnProps = {
 
 const POLLING_INTERVAL = 30000;
 
-const InvoiceMediaPreview: FC<OwnProps> = ({
+const InvoiceMediaPreview = ({
   message,
   isConnected,
-}) => {
+}: OwnProps) => {
   const { openInvoice, loadExtendedMedia } = getActions();
-  const lang = useOldLang();
+  const lang = useLang();
   const invoice = getMessageInvoice(message);
 
   const { chatId, id } = message;
@@ -47,9 +48,8 @@ const InvoiceMediaPreview: FC<OwnProps> = ({
     extendedMedia,
   } = invoice!;
 
-  const {
-    width, height, thumbnail, duration,
-  } = extendedMedia!;
+  const { thumbnail, duration } = extendedMedia!;
+  const { width, height } = getMediaDimensions(extendedMedia!);
 
   const handleClick = useLastCallback(() => {
     openInvoice({
@@ -62,7 +62,11 @@ const InvoiceMediaPreview: FC<OwnProps> = ({
 
   return (
     <div
-      className={buildClassName(styles.root, 'media-inner')}
+      className={buildClassName(styles.root, mediaStyles.frame, mediaStyles.intrinsic, 'media-inner')}
+      style={buildStyle(
+        `--media-width: ${width}px`,
+        `--media-aspect-ratio: ${width} / ${height}`,
+      )}
       onClick={handleClick}
     >
       <MediaSpoiler
@@ -75,7 +79,7 @@ const InvoiceMediaPreview: FC<OwnProps> = ({
       {Boolean(duration) && <div className={styles.duration}>{formatMediaDuration(duration)}</div>}
       <div className={styles.buy}>
         <Icon name="lock" className={styles.lock} />
-        {lang('Checkout.PayPrice', formatCurrencyAsString(amount, currency))}
+        {lang('CheckoutPayPrice', { amount: formatCurrencyAsString(amount, currency) })}
       </div>
     </div>
   );

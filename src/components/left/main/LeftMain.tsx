@@ -1,5 +1,4 @@
 import type { Update } from '@tauri-apps/plugin-updater';
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useRef, useState,
 } from '../../../lib/teact/teact';
@@ -9,14 +8,16 @@ import type { FolderEditDispatch } from '../../../hooks/reducers/useFoldersReduc
 import { LeftColumnContent } from '../../../types';
 
 import { DEBUG } from '../../../config';
+import { selectCommunityPanelId } from '../../../global/selectors';
 import { IS_TAURI } from '../../../util/browser/globalEnvironment';
 import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 
+import useSelector from '../../../hooks/data/useSelector';
 import useInterval from '../../../hooks/schedulers/useInterval';
 import useForumPanelRender from '../../../hooks/useForumPanelRender';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 import useShowTransitionDeprecated from '../../../hooks/useShowTransitionDeprecated';
 
 import Button from '../../ui/Button';
@@ -24,6 +25,7 @@ import Transition from '../../ui/Transition';
 import NewChatButton from '../NewChatButton';
 import LeftSearch from '../search/LeftSearch.async';
 import ChatFolders from './ChatFolders';
+import CommunityPanel from './community/CommunityPanel';
 import ContactList from './ContactList.async';
 import ForumPanel from './forum/ForumPanel';
 import LeftMainHeader from './LeftMainHeader';
@@ -53,7 +55,7 @@ const TAURI_CHECK_UPDATE_INTERVAL = 10 * 60 * 1000;
 
 let closeTimeout: number | undefined;
 
-const LeftMain: FC<OwnProps> = ({
+const LeftMain = ({
   content,
   searchQuery,
   searchDate,
@@ -68,7 +70,7 @@ const LeftMain: FC<OwnProps> = ({
   onTopicSearch,
   isAccountFrozen,
   isFoldersSidebarShown,
-}) => {
+}: OwnProps) => {
   const { openLeftColumnContent } = getActions();
   const [isNewChatButtonShown, setIsNewChatButtonShown] = useState(IS_TOUCH_ENV);
   const [tauriUpdate, setTauriUpdate] = useState<Update>();
@@ -80,6 +82,15 @@ const LeftMain: FC<OwnProps> = ({
   } = useForumPanelRender(isForumPanelOpen);
   const isForumPanelRendered = isForumPanelOpen && content === LeftColumnContent.ChatList;
   const isForumPanelVisible = isForumPanelRendered && isAnimationStarted;
+
+  const communityPanelId = useSelector((global) => selectCommunityPanelId(global));
+  const isCommunityPanelOpen = Boolean(communityPanelId);
+  const {
+    shouldRenderForumPanel: shouldRenderCommunityPanel,
+    handleForumPanelAnimationEnd: handleCommunityPanelAnimationEnd,
+    handleForumPanelAnimationStart: handleCommunityPanelAnimationStart,
+  } = useForumPanelRender(isCommunityPanelOpen);
+  const isCommunityPanelRendered = isCommunityPanelOpen && content === LeftColumnContent.ChatList;
 
   const {
     shouldRender: shouldRenderUpdateButton,
@@ -178,7 +189,7 @@ const LeftMain: FC<OwnProps> = ({
     (IS_TAURI && !DEBUG) ? TAURI_CHECK_UPDATE_INTERVAL : undefined,
   );
 
-  const lang = useOldLang();
+  const lang = useLang();
 
   return (
     <div
@@ -239,8 +250,16 @@ const LeftMain: FC<OwnProps> = ({
           onClick={handleUpdateClick}
           isLoading={isTauriUpdateDownloading}
         >
-          {lang('lng_update_telegram')}
+          {lang('UpdateTelegram')}
         </Button>
+      )}
+      {shouldRenderCommunityPanel && (
+        <CommunityPanel
+          isOpen={isCommunityPanelOpen}
+          isHidden={!isCommunityPanelRendered}
+          onOpenAnimationStart={handleCommunityPanelAnimationStart}
+          onCloseAnimationEnd={handleCommunityPanelAnimationEnd}
+        />
       )}
       {shouldRenderForumPanel && (
         <ForumPanel

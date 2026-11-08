@@ -1,593 +1,125 @@
-# Instructions
-
-You are an expert in TypeScript, JavaScript, HTML, SCSS and Teact with deep experience in our project's simplified React-like API. You are working on a modern web app for Telegram.
-
-- **Be concise.** Only change code directly related to the current task; leave unrelated parts untouched.
-- **Reuse** existing types, functions and components. Search before creating a new one.
-- **No new libraries.** Use existing dependencies only. If a task truly can't be done without a new library, stop and explain why.
-- **Do not** write tests.
-
-- **SCSS modules:**
-  - Name classes in camelCase.
-  - Import as `styles` in your component:
-    ```scss
-    /* Component.module.scss */
-    .myWrapper { /*…*/ }
-    ```
-    ```tsx
-    /* Component.tsx */
-    import styles from "./Component.module.scss";
-    <div className={buildClassName(styles.myWrapper, "legacy-class")} />
-    ```
-  - Use [buildClassName.ts](mdc:src/util/buildClassName.ts) to merge multiple class names.
-  - **Always extract styles to files** - avoid inline styles unless absolutely necessary.
-  - **If file already imports styles**, check where they come from and add new styles there - don't create new style files.
-  - Prefer rem units for all measurements. Exceptions are possible, but usually rare. Conversion: `N px = N / 16 rem`.
-  - No complex or broad selectors. Prefer basic classes.
-  - Avoid tag-based selectors. Every styled element must have its own class. Nest only when it makes sense, e.g. `.parentModifier .child`
-
-- **Code Style:**
-  - Baseline: [Airbnb JavaScript Style Guide](https://github.com/airbnb/javascript). Rules below extend/override it.
-  - Early returns (guard clauses) over deeply nested conditionals.
-  - Functions and methods start with an imperative verb (`openModal`, `closeDialog`, `handleClick`, `runMethod`). Exception: `callback`.
-  - Acronyms follow standard camelCase (no all-caps): `parseJson`, `jsonToYaml`, `isUiReady`.
-  - Prefix boolean variables/props with a modal verb:
-    - `is*` (isVisible), `has*` (hasChanged), `are*` for plurals (areMessagesLoaded — never `is` for plurals), `should*` (shouldRedirect), `can*` (canComment), `will*` (willChange).
-    - Exception: the argument `force`.
-  - **Optional boolean args/props default to `undefined`.** If you need a prop that *hides* an avatar, name it `noAvatar` rather than passing `hasAvatar={false}`.
-  - Allowed abbreviations only: `e` (event handler arg), `err` (catch arg), `cb` (callback). Single-letter names allowed in one-line lambdas (`users.map(u => u.name)`). Avoid all others.
-  - **Hoist static constants** to the top of the module with `UPPER_SNAKE_CASE`. Never inline magic numbers inside function bodies.
-  - Prefer function declarations over function expressions (except arrow functions when you need to bind `this`).
-  - Order functions top-down by call hierarchy: high-level at the top, helpers at the bottom.
-  - **Cache pure function results** — if called more than once in the same scope, store the result in a variable.
-  - Prefer checking required parameter before calling a function, avoid making it optional and checking at the beginning of the function.
-  - **Comments**: start with a capital letter; single-sentence comments have no trailing period; multi-sentence comments end each sentence with a period; wrap code entities in backticks. Only leave comments for complex logic.
-  - **Dead code**: do not keep unused, "just in case", or speculative library-style utilities. If an object isn't used outside its own module, do not export it.
-  - **TypeScript non-null assertion**: when a value is guaranteed to exist at runtime but TS can't infer it, use `!` instead of an `if` guard.
-    ```ts
-    // ✅ Correct
-    func(a!);
-    // ❌ Incorrect
-    if (a) func(a);
-    ```
-  - Avoid using default values for props that can be intentionally undefined/false.
-  - No unnecessary `as` casts. Prefer `satisfies` where possible.
-  - Do not use `null`. There's linter rule to enforce it.
-  - **IMPORTANT: Avoid conditional spread operators** - TypeScript doesn't check if spread fields match the target type.
-    ```typescript
-    // ❌ BAD - No type checking
-    { ...condition && { field: value } }
-
-    // ✅ GOOD - Full type checking
-    { field: condition ? value : undefined }
-    ```
-  - **IMPORTANT: Use string templates for inline styles** - Always use template literals for style prop. Teact does not support object:
-    ```typescript
-    // ✅ CORRECT
-    style={`transform: translateX(${value}%)`}
-
-    // ❌ WRONG
-    style={{ transform: `translateX(${value}%)` }}
-    style={{ '--custom-prop': value } as React.CSSProperties}
-    ```
-  - **IMPORTANT: Font weights in CSS** - Always use existing CSS variables for font-weight. Never use numeric values or custom values.
-    ```scss
-    // ✅ CORRECT
-    font-weight: var(--font-weight-medium);
-    font-weight: var(--font-weight-semibold);
-
-    // ❌ WRONG
-    font-weight: 600;
-    font-weight: bold;
-    ```
-
-- **Localization & Text Rules:**
-  - **ALWAYS** use `lang()` for all text content - never hardcode strings.
-  - `lang()` can accept parameters: `lang('Key', { param: value })`.
-  - Add new translations to `src/assets/localization/fallback.strings`.
-
-- **After your solution:**
-  1. Think like on a code review and identify any shortcomings.
-  2. Fix those issues. Repeat review-fix cycle until you are sure about code quality.
-  3. Present the improved result.
-
-- **When deeper debugging is needed:**
-  1. Outline clear, step-by-step debugging instructions in your output.
-  2. Remove any temporary debug code once the issue is resolved.
-
-- **Linter commands**
-  After finishing your changes, run `npm run check:ts` if you touched TypeScript files and/or `npm run check:css` for SCSS.
-  If linter reports incorrect import order, try fixing it using command. If it fails, make ONE try to fix it manually and leave it as is.
-
-- **Lint errors you can't fix manually:**
-  Suggest running `npx eslint --fix <filename>`.
-
-# Telegram Web API Guide
-
-## 1. API Definition
-- The master file is `src/lib/gramjs/tl/static/api.tl` (TL syntax).
-- **Don't edit** this autogenerated file. TypeScript types live in `api.d.ts`.
-- We use GramJS inside a web worker; UI code uses plain objects (`Api*` types) in `src/api/types`.
-
-## 2. Generating Code
-1. Make sure to include the method name in `api.json`.
-2. Run:
-```bash
-   npm run gramjs:tl
-```
-to regenerate `api.d.ts`.
-3. In `src/api/gramjs/methods/`, pick a file for your method, then:
-* Name fetchers `fetch*` if the TL method starts with `get`.
-* Use a destructured parameter object.
-* Call the API via:
-  ```ts
-  const result = await invokeRequest(
-    new GramJs.namespace.MethodName({ /* params */ })
-  );
-  ```
-* If `result` is `undefined`, return `undefined` to signal an error.
-* Convert any returned GramJS classes into plain `Api*` objects.
-
-Conversion from and to Api* objects is done by `apiBuilders` (function name starts with `buildApi*`) and `gramjsBuilders` (function name `buildInput*`).
-
-## 3. Using the API
-
-* In your actions, call:
-
-  ```ts
-  const result = await callApi('methodName', { /* params */ });
-  ```
-* Always check for `undefined` before proceeding.
-* **IMPORTANT: Do not pass `accessHash` directly to API methods.** Methods that accept separate `id` and `accessHash` parameters are outdated. Instead, pass the full `ApiPeer`, `ApiChat`, or `ApiUser` object. The `buildInput*` functions in `gramjsBuilders` will extract the necessary fields.
-
-## 4. Example
-
-```ts
-// src/api/gramjs/methods/users.ts
-export async function fetchUsers({ users }: { users: ApiUser[] }) {
-  const result = await invokeRequest(new GramJs.users.GetUsers({
-    id: users.map(({ id, accessHash }) => buildInputUser(id, accessHash)),
-  }));
-  if (!result || !result.length) {
-    return undefined;
-  }
-
-  const apiUsers = result.map(buildApiUser).filter(Boolean);
-  const userStatusesById = buildApiUserStatuses(result);
-
-  return {
-    users: apiUsers,
-    userStatusesById,
-  };
-}
-
-// src/global/actions/api/users.ts
-addActionHandler('loadUser', async (global, actions, { userId }) => {
-  const user = selectUser(global, userId);
-  if (!user) return;
-  const res = await callApi('fetchUsers', { users: [user] });
-  if (!res) return;
-  // update global state...
-});
-```
-
-## 5. Handling Updates
-
-* Updates come in via `mtpUpdateHandler.ts`.
-* They're routed through `src/global/actions/apiUpdaters` to merge into global state.
-* Types are defined in `src/api/types/updates.ts`.
-
-## Component Style Guide
-
-### 1. Basics & Imports
-
-* All components use JSX and render with Teact.
-* Do not import "react". React types are available globally in React namespace (e.g. React.MouseEvent).
-* Built-in hooks live in Teact library. Import them from there.
-
-### 2. Props & Types
-
-* Split your props into two types:
-  * **OwnProps**: data passed in by the parent
-  * **StateProps**: data injected by `withGlobal` HOC
-* Merge them as `OwnProps & StateProps` when defining your component.
-* You can skip one or both if they are not used.
-* **Order rule**: list any handlers or functions *last* in your props definitions.
-* Do not pass unmemoized objects as props into memo() components.
-
-### 3. Hooks
-* **useLastCallback** is your go-to for callbacks, since it won't trigger re-renders and always uses the latest scope.
-* Only use **useCallback** when you really need to memoize a render function.
-* Prefer **useFlag()** over `useState<boolean>()` for simple boolean toggles. `useState` is preferred when component just calls `setState(someVariable)`.
-* Check the `hooks/` folders for additional utilities.
-* Avoid adding new `useEffect` where possible.
-
-### 4. Component Signature
-> **Migrate** any old `FC` syntax to the new form.
-
-```ts
-// Before
-const OldComp: FC<OwnProps & StateProps> = ({ … }) => { … }
-
-// After
-const NewComp = (props: OwnProps & StateProps) => { … }
-```
-
-### 5. Memoization
-* Wrap most components with `memo()` to avoid unnecessary updates — **but only if none of the props are inherently non-memoizable** (e.g. `children`). Consider skipping memo for simple wrapper components whose children change on almost every render.
-* Don't pass freshly created objects or arrays as props to memoized components.
-* **Exceptions** (no memo): `ListItem`, `Button`, `MenuItem`, etc.
-* `useMemo` should be used **only** when:
-  - The computation contains loops or expensive operations, **or**
-  - It produces a complex object passed as a prop to a child `memo` component.
-
-### 6. Localization
-
-* Call `const lang = useLang()` at the top of your component.
-* Look up the localization guide for how to add new language keys.
-
-### 7. Icons
-* Use `<Icon>` component for icons. Available icons are listed in `src/types/icons/index.ts`
----
-
-### Example
-
-```ts
-import { memo, useState, useRef } from '../../lib/teact/teact';
-import { withGlobal, getActions } from '../../global';
-
-import useFlag from '../../hooks/useFlag';
-import useLang from '../../hooks/useLang';
-import useLastCallback from '../../hooks/useLastCallback';
-
-import styles from './Component.module.scss';
-
-type OwnProps = {
-  id: string;
-  className?: string;
-  onClick?: NoneToVoidFunction;
-};
-
-type StateProps = {
-  stateValue?: string;
-};
-
-// Constants first
-const MAX_ITEMS = 10
-
-const Component = ({ id, className, stateValue, onClick }: OwnProps & StateProps) => {
-  const { someAction } = getActions(); // Should always be first, if actions are used
-
-  const ref = useRef<HTMLDivElement>();
-
-  const [color, setColor] = useState('#FF00FF');
-  const [isOpen, open, close] = useFlag();
-
-  const lang = useLang(); // Somewhere near the top, after state definition
-
-  const handleClick = useLastCallback(() => {
-    if (!ref.current) return;
-    const el = ref.current;
-    setColor(el.dataset.value);
-    close();
-    onClick?.();
-    someAction(el.dataset.value);
-  });
-
-  return (
-    <div ref={ref} className={styles.root + (className ? ` ${className}` : '')}>
-      <button onClick={handleClick}>{lang('ButtonKey')}</button>
-      <p>{stateValue}</p>
-    </div>
-  );
-}
-
-export default memo(withGlobal<OwnProps>((global, { id }): Complete<StateProps> => {
-    const stateValue = selectValue(global, id);
-    return {
-      stateValue,
-    };
-  })(Component)
-)
-```
-
-## Global State Overview
-
-Global State is our single, app-wide store, similar to Redux or Zustand. All its code lives under `src/global/`, with subfolders grouping related functionality (for example, `selectors/users.ts` holds all user-related selectors).
-
-### 1. Folder Structure
-
-* **`actions/`**: Actions that are used to update global from any point in the app
-* **`selectors/`**: Pure functions that read data (e.g. `selectors/users.ts`).
-* **`reducers/`**: Functions that update global state.
-* **`types/`**: All TypeScript types live in `src/global/types`.
-* **`cache.ts`**: Manages saving a slimmed-down copy of global to IndexedDB.
-
-### 2. Actions
-
-1. **Preferred** way to update global. When inside action, use `setGlobal`, or simple `return` if sync.
-2. **Sync actions** return type should be `ActionReturnType`.
-3. **Async actions** return type should be `Promise<void>`.
-4. If you add or remove an action, update `actions.ts` accordingly.
-5. Actions in `ui` folder should be only sync.
-
-### 3. Multi-Tab Support
-
-* Actions and selectors can accept a `tabId` parameter, so we don't lose tab context when working with multiple tabs.
-* **`tabId` is required** if calling an action or selector that can accept it.
-* **Exception**: UI components may call without `tabId` (they receive it automatically).
-
-### 4. Selectors & Reducers
-
-* If logic takes more than one line, create a new selector or reducer in the appropriate folder and file.
-* **Selectors must be pure**: only use their inputs and global. Don't allocate new objects or arrays, as that breaks memoization.
-
-### 5. Data Constraints
-
-* Global may only store serializable primitives (strings, numbers, booleans).
-* When you change a type that's cached in `cache.ts`, add a migration to avoid errors from new selectors.
-
----
-
-## Component Guidelines
-
-### 1. Accessing Global in Components
-
-* Prefer existing `withGlobal` (a `mapStateToProps` helper) to pull in state.
-* There is an experimental `useSelector` API available. If your value can be retrieved using simple selector and `withGlobal` is not present, use it.
-* **Use** `getGlobal` **only** inside callbacks for one-off reads (it's non-reactive).
-
-### 2. Performance
-
-* Wrap `withGlobal` in `memo` so the component re-renders only on real data changes.
-* **Don't** return new arrays or objects inside `withGlobal`; that defeats memoization.
-* If you need to filter or map a list, use `useShallowSelector` to retrieve reactive array and perform computation in `useMemo`.
-* Force `Complete<StateProps>` return type for `withGlobal` parameter, as it ensures that all defined properties are passed.
-
-### 3. Example Component
-
-```ts
-type OwnProps = { id: string };
-type StateProps = {
-  someValue?: string;
-  otherValue?: number;
-  thirdValue: boolean;
-};
-
-const Component = ({
-  id,
-  someValue,
-  otherValue,
-  thirdValue,
-}: OwnProps & StateProps) => {
-  // component logic...
-};
-
-export default memo(
-  withGlobal<OwnProps>((global, { id }) => {
-    const { otherValue } = selectTabState(global);
-    const someValue  = selectSomeValue(global, id);
-    const thirdValue = Boolean(global.rawValue);
-
-    return {
-      someValue,
-      otherValue,
-      thirdValue,
-    };
-  })(Component);
-);
-```
-
-# Localization Guide
-
-**1. Setup & Fallback**
-
-* Translations live on [Translation Platform](https://translations.telegram.org/).
-* Fallback file: `src/assets/localization/fallback.strings`.
-
-**2. Getting Strings**
-
-```ts
-const lang = useLang();
-
-// Simple
-lang('SimpleKey');
-
-// Plurals
-lang('PluralKey', undefined, { pluralValue: 3 });
-lang('PluralKey', { count: 3 }, { pluralValue: 3 }); // if key has variables
-
-// String replacements
-lang('ReplKey', { name: 'Amy' });
-
-// JSX nodes (e.g. links)
-lang('LinkKey', { link: <Link /> }, { withNodes: true });
-
-// Markdown
-lang('MarkdownKey', undefined, { withNodes: true, withMarkdown: true });
-```
-
-**3. Adding a New Key**
-
-0. Make sure key does not exist already.
-1. Search Translation Platform for similar strings to get the correct wording.
-2. Add it to `fallback.strings`.
-3. If it's plural, include `_one` and `_other`.
-4. Run `npm run lang:ts`.
-
-**4. Naming Rules**
-
-* **PascalCase** (no dots).
-* Use short, clear prefixes for context (e.g. `Acc` for accessibility).
-* Keep names under ~30 chars, shorten consistently if needed.
-
-**5. API & Options**
-
-* **Basic**: `lang(key, vars?, options?) → string`
-
-* **Advanced** (`withNodes`): returns `TeactNode[]` so you can inject JSX.
-
-* **Other options**:
-
-  * `withMarkdown` (for simple markdown + emojis)
-  * `renderTextFilters` (custom filters)
-  * `specialReplacement` (for replacing substrings, e.g. icons)
-
-* **Object syntax**:
-  Simple form that returns string can be used in some actions.
-  ```ts
-  actions.showNotification({ key: 'LangKey' });
-
-  lang.with({ key: 'hello', vars: { name }, options: { withNodes: true } });
-  ```
-
-**6. Handy Extensions**
-
-* `lang.region(code)` → country name
-* `lang.conjunction(['a','b','c'])` → "a, b, and c"
-* `lang.disjunction(['x','y'])` → "x or y"
-* `lang.number(1234)` → locale-formatted number
-* Flags: `lang.isRtl`, `lang.code`, `lang.rawCode`
-
-**7. Beyond React**
-Use `getTranslationFn()` to grab the same `lang` function in non-component code. Discouraged, use object syntax.
-
-# ⚠️ IMPORTANT: Fasterdom & Rendering Phases
-
-## Rendering Cycle
-
-```
---- frame start ---
-1. effects
-2. requested measures (DOM reads)
-3. render JSX → DOM
-4. layout effects
-5. requested mutations (DOM writes)
-6. forced reflow measure (avoid!)
-7. forced reflow mutate (avoid!)
---- frame end ---
-```
-
-## Phase Rules
-
-| Hook/Context | Can READ (measure) | Can WRITE (mutate) |
-|--------------|-------------------|-------------------|
-| `useLayoutEffect` | ❌ NO | ✅ YES |
-| `useLayout` (deprecated) | ✅ YES | ❌ NO |
-| Event handlers (default) | ✅ YES | ❌ NO (use `requestMutation`) |
-| `requestMeasure` callback | ✅ YES | ❌ NO |
-| `requestMutation` callback | ❌ NO | ✅ YES |
-
-## Usage Patterns
-
-```typescript
-// ✅ CORRECT: Read in measure phase, write in mutation phase
-requestMeasure(() => {
-  const width = element.offsetWidth;  // READ
-
-  requestMutation(() => {
-    element.style.width = `${width * 2}px`;  // WRITE
-  });
-});
-
-// ❌ WRONG: Alternating reads/writes causes layout thrashing
-const width = element.offsetWidth;        // READ → reflow
-element.style.width = `${width * 2}px`;   // WRITE → reflow
-const height = element.offsetHeight;      // READ → reflow again!
-```
-
-## Signals: State Without Re-renders
-
-Signals deliver updates **without causing component renders**. Use for frequently-updated values.
-
-```typescript
-// Create signal
-const [getValue, setValue] = createSignal(initialValue);
-
-// Get value
-getValue();
-
-// Set value (notifies subscribers, NO re-render)
-setValue(newValue);
-
-// Subscribe to changes
-getValue.subscribe(() => { /* react to change */ });
-```
-
-**Signal Hooks:**
-- `useSignal()` – Create signal tied to component
-- `useDerivedSignal()` – Derive new signal from other signals/variables
-- `useDerivedState()` – Convert signal to render variable (triggers re-render)
-- `useStateRef()` – Access current value without it being a dependency
-
-**When to use signals:**
-- Typing text, caret position
-- Animation state tracking
-- Values that change frequently but don't need re-render
-- Cross-component communication without prop drilling
-
-## Key Optimization Hooks
-
-| Hook | Purpose |
-|------|---------|
-| `useLastCallback` | Stable callback reference, always latest scope |
-| `useStateRef` | Access state without triggering effects |
-| `useLayoutEffectWithPrevDeps` | Synchronous effect with previous values |
-| `useSyncEffect` | Effect that runs during render (not RAF) |
-| `useResizeObserver` | Efficient element size observation |
-| `useIntersectionObserver` | Viewport visibility tracking |
-
-## Heavy Animation Handling
-
-```typescript
-// Mark animation start (pauses non-critical updates)
-const endAnimation = beginHeavyAnimation(duration);
-
-// Run code only when fully idle (no animations + browser idle)
-onFullyIdle(() => {
-  // Safe for heavy computations
-});
-```
-
-## Performance Checklist
-
-1. **Animations first** – Evaluate if code negatively impacts animations
-2. **Simplify algorithms** – Move complex ones to `onFullyIdle`
-3. **No loops in selectors** – Avoid iterations in `withGlobal` selectors
-4. **Minimize re-renders** – Especially in `Message`, `Chat`, `Sticker`, etc.
-5. **Understand effect timing** – `useEffect` vs `useLayoutEffect`
-6. **Prefer signals** – When you need effects only, not renders
-7. **Use `requestForcedReflow`** – Only as last resort for sync measure+mutate
-
-# Backward Compatibility
-
-- When adding a new required section to `GlobalState`, always add a corresponding entry in `migrateCache`.
-- When changing types in global state or its nested objects, verify the migration path from the current `master` branch.
-
-# Commit Messages
-
-Follow this pattern for PR titles and commit messages:
-
-```
-[Tag] Component / Area: Imperative description
-```
-
-- **Tag** (optional): `[Refactoring]`, `[Perf]`, `[Size]`, `[Dev]`, `[SEO]`, `[CI]`, `[Security]`.
-- **Component or domain area** — capitalized.
-- **Colon**, followed by an imperative-mood description starting with a capital letter.
-- Prefer plain text over code entities, but use backticks when referencing programmatic names.
-- Each sentence starts with a capital letter.
-- If a commit contains more than one task, separate them with a semicolon.
-- No trailing period or semicolon.
-- Add `Closes #<issue_number>` to the PR description to link the issue.
-
-Examples:
-
-```
-Video Player: Hide download button in fullscreen
-Message / Round Video: Fix progressive loading
-PWA: Support system sharing menu
-[SEO] Replace `meta[noindex]` with `link[canonical]`
-[iOS] Startup: Add logs and signposts
-[Refactoring] Fix @typescript-eslint/await-thenable errors
-```
+# Project instructions
+
+Telegram web app using TypeScript and Teact, a custom React-like UI library. Follow nearby code and the repository's ESLint and Stylelint configurations; the rules below capture project-specific constraints and review feedback.
+
+## Scope and workflow
+
+- Keep changes directly related to the request. Search for existing types, functions, components, and hooks before adding them.
+- Use existing dependencies only. If the task requires a new library, stop and explain why.
+- Make routine implementation decisions from the code and task context. Ask when ambiguity materially changes the work; continue independent, authorized work meanwhile.
+- Only write tests when directly prompted to do so.
+- Review the change for the smallest coherent design that satisfies the requirements. Fix substantive findings and repeat until none remain; avoid speculative abstractions, unused exports, and unrelated cleanup.
+- Keep responses concise: summarize the result, verification, and any unresolved issue. If deeper debugging needs user involvement, provide concrete steps. Remove temporary debug code when resolved.
+
+## Friction log
+
+- Record concrete inefficiencies in code patterns, contributor practices, or tooling in [FRICTION_LOG.md](FRICTION_LOG.md) when resolving them exceeds the current task's scope. Keep the current task focused.
+- Read existing entries first and extend a matching entry instead of adding a duplicate.
+- Use a descriptive heading and one or two paragraphs explaining the current behavior, its impact, and representative code paths or reproduction details. Distinguish verified observations from reported symptoms and suspected causes. Resolution preferences or suggestions are optional; estimates and proposed fixes are not required.
+- Keep a flat list of open problems. Contributors with available time can pick an entry, recheck the relevant code, and work on it. Remove resolved entries in the same change, or update an entry to describe what remains.
+
+## Verification
+
+- After TypeScript changes, run `npm run check:ts`; after SCSS changes, run `npm run check:css`.
+- For import-order errors, try `npx eslint --fix <filename>`. If it fails, make one manual attempt, then report the remaining error. Suggest that command for unresolved auto-fixable ESLint errors.
+- Keep additional verification proportional to the change. Once relevant checks pass, repeat or broaden them only for new changes, failures, or unresolved concerns.
+- For browser verification, reuse `localhost:1234` if running; otherwise run `npm run dev`. If a sandboxed check fails, confirm through the browser or an approved check outside the sandbox before starting another server.
+- Do not modify account state (send messages, change settings, etc.) unless directly prompted.
+
+## Code conventions
+
+- Functions and methods start with an imperative verb; `callback` is an exception. Use camelCase for acronyms (`parseJson`, `isUiReady`).
+- Boolean names use `is`, `has`, `are` (for plurals), `should`, `can`, or `will`; the argument `force` is an exception.
+- Optional boolean arguments and props default to `undefined`. Use a negative prop such as `noAvatar` for opt-out behavior. Preserve intentionally `undefined` or `false` prop values instead of adding defaults.
+- Allowed abbreviations: `e` for events, `err` for errors, `cb` for callbacks; single-letter names are allowed in one-line lambdas.
+- Hoist reused static constants to module scope with `UPPER_SNAKE_CASE`. Do not inline magic numbers inside functions, except 0 and 1.
+- Prefer function declarations, except where arrow functions bind `this`; order functions by call hierarchy, with high-level functions first. Follow the component signature convention below for components.
+- Prefer early returns. Check required arguments at the call site instead of making them optional solely to guard inside the callee.
+- Cache a pure function's result when using it more than once in the same scope.
+- When a value is guaranteed at runtime but TypeScript cannot infer it, use `!` instead of a guard that silently skips work. Avoid unnecessary `as` casts; prefer `satisfies` where appropriate.
+- Use `undefined`, not `null`.
+- Compare with server dates (message dates, expiries, `validUntil`) through `getServerTime()` from `src/util/serverTime.ts`, not `Date.now()`: the device clock can be off. Use `Date.now()` or `performance.now()` only for local durations.
+- Avoid conditional object spreads: use `{ field: condition ? value : undefined }` so TypeScript checks the field against the target type.
+- Comments explain complex logic. Start with a capital letter, wrap code entities in backticks, and omit the trailing period for single-sentence comments; punctuate each sentence in multi-sentence comments.
+- Docs and comments assert current behavior in the present tense. Keep bug/change history and comparisons to prior code in Git history. Comparisons with hypothetical alternatives are fine when they explain the current design.
+
+## Teact components
+
+- Import built-in hooks from `src/lib/teact/teact.ts`; do not import `react`. React types are globally available in the `React` namespace.
+- Type props on the component parameter instead of using `FC`. Migrate existing `FC` signatures in components you change.
+- Use `OwnProps` for parent props and `StateProps` for `withGlobal` props; omit unused types. Put handlers and functions last in prop types.
+- If used, `getActions()` is the first statement in the component. Call `useLang()` near the top.
+- Prefer `useLastCallback` for stable callbacks with the latest scope. Use `useCallback` when a render function needs memoization.
+- Prefer `useFlag` for simple toggles; use `useState` when setting a boolean from another variable. Avoid adding `useEffect` when existing hooks or direct callbacks suffice.
+- Wrap components with `memo` when their props can remain stable. Skip wrappers with frequently changing `children` and primitives such as `ListItem`, `Button`, and `MenuItem`.
+- Do not pass freshly allocated objects or arrays to memoized components. Use `useMemo` only for loops/expensive work or complex values passed to memoized children.
+- Use the shared `Icon` component; available names are in `src/types/icons/index.ts`.
+
+## Global state
+
+- Prefer a component's existing `withGlobal`. If it is absent and a simple selector suffices, use `useSelector`. Use `getGlobal` only inside callbacks for one-off, non-reactive reads.
+- Annotate `withGlobal`'s mapping function with `Complete<StateProps>` so every state prop is returned. Wrap connected components in `memo` when their props can remain stable.
+- Selectors are pure and preserve object/array identity. Avoid loops and new objects or arrays in `withGlobal` mappings. For list computations, use `useShallowSelector` and perform the computation in `useMemo`.
+- Put state selection/update logic longer than one line in the appropriate selector/reducer under `src/global/`.
+- Update state through actions: return state from synchronous handlers or use `setGlobal`. Sync handlers return `ActionReturnType`; async handlers return `Promise<void>`. Actions under `src/global/actions/ui/` are synchronous.
+- Update `src/global/types/actions.ts` when adding or removing an action.
+- Pass `tabId` when calling an action or selector that accepts it. UI component calls may omit it because they receive it automatically.
+- Store serializable data in global state: primitives and plain objects/arrays containing them, not class instances or functions.
+- When adding a required `GlobalState` section, add its initialization to the `migrateCache` path in `src/global/cache.ts`. Changes to cached types need a migration; verify compatibility with state cached by the current `master` branch, including nested objects.
+
+## Rendering and animation
+
+Teact and Fasterdom separate DOM measurement from mutation. The frame order is effects, requested measures, JSX rendering, layout effects, requested mutations, then forced reflow measures/mutations.
+
+| Context | Measure DOM | Mutate DOM |
+| --- | --- | --- |
+| `useLayoutEffect` | No | Yes |
+| `useLayout` (deprecated) | Yes | No |
+| Event handlers | Yes | Schedule with `requestMutation` |
+| `requestMeasure` | Yes | No |
+| `requestMutation` | No | Yes |
+
+- For a measurement-dependent write, read inside `requestMeasure` and schedule the write with `requestMutation`. Use `requestForcedReflow` only as a last resort for synchronous measure/mutate work. See `src/lib/fasterdom/fasterdom.ts`.
+- Prefer signals for frequent updates that do not need component renders, such as typing, caret position, and animation state. Signal setters notify subscribers without rendering; `useDerivedState` turns signal values into render state. Use `useStateRef` to read current state without adding dependencies.
+- Reuse existing signal and scheduling hooks. `useSyncEffect` runs during render; `useLayoutEffectWithPrevDeps` runs in the layout-effect phase. Respect the corresponding DOM phase rules.
+- Protect animation performance, especially in `Message`, `Chat`, and `Sticker`. Use `beginHeavyAnimation` to pause non-critical updates during heavy animations and `onFullyIdle` for work that can wait until animations and browser activity are idle.
+
+## Styles
+
+- Use camelCase classes in SCSS modules, import them as `styles`, and combine classes with `src/util/buildClassName.ts`.
+- Add styles to the stylesheet already imported by the component. Extract styles to files; use inline styles only for values that need them.
+- Teact's `style` prop accepts strings, not objects. Use a template literal for dynamic styles, e.g. ``style={`transform: translateX(${value}%)`}``.
+- Prefer `rem` measurements (`N px = N / 16 rem`), with exceptions only when needed.
+- Give each styled element a class. Avoid broad, complex, and tag-based selectors; nest only for meaningful relationships such as `.parentModifier .child`.
+- Use existing font-weight variables, such as `var(--font-weight-medium)` and `var(--font-weight-semibold)`; never numeric weights, `bold`, or custom values.
+
+## Localization
+
+- Use `lang()` for all user-facing text. In components, get it from `useLang()`.
+- Before adding a key, search existing translations and the [Translation Platform](https://translations.telegram.org/) for matching wording. Add new keys to `src/assets/localization/fallback.strings`, then run `npm run lang:ts`.
+- Keys use PascalCase without dots, short context prefixes, and roughly fewer than 30 characters. Plurals need `_one` and `_other` forms.
+- Replacements are the second argument; plural selection is an option in the third. Include replacements when the plural string has variables: `lang('PluralKey', { count }, { pluralValue: count })`.
+- Use `{ withNodes: true }` for JSX replacements and add `withMarkdown: true` for Markdown. Reuse `lang.number`, `lang.region`, and conjunction/disjunction helpers where appropriate.
+- Outside components, prefer translation objects supported by actions, such as `showNotification({ key: 'LangKey' })`, over calling `getTranslationFn()`.
+
+## Settings search
+
+- Settings are searchable only through `src/components/left/settings/search/registry.ts`. When adding, removing, renaming, or moving a settings screen or row, update the registry in the same change.
+- A registry entry is located on its screen by the visible text of its `titleKey`, so use the lang key the screen renders. For a row whose text depends on state, add `data-settings-anchor="<titleKey>"` to its element.
+- `tg://settings/<path>` links are mapped in `src/util/settingsLinks.ts`. Add a path only when native clients support it and it targets an existing screen or registry entry.
+
+## Telegram API
+
+- GramJS runs in a web worker; UI and global state use plain `Api*` objects from `src/api/types`.
+- Read the TL schema in `src/lib/gramjs/tl/static/api.tl`; do not edit it. Add needed method names to `src/lib/gramjs/tl/static/api.json` and run `npm run gramjs:tl` to regenerate `src/lib/gramjs/tl/api.d.ts` and schema modules.
+- Implement methods under `src/api/gramjs/methods/` using destructured parameter objects and `invokeRequest(new GramJs.namespace.MethodName(...))`. Name TL `get*` fetchers `fetch*`.
+- Convert results using `apiBuilders` (`buildApi*`) and inputs using `gramjsBuilders` (`buildInput*`). Return `undefined` when `invokeRequest` returns `undefined`.
+- Global actions call methods through `callApi` and check for `undefined` before updating state. Pass full `ApiPeer`, `ApiChat`, or `ApiUser` objects across this boundary; do not add separate `id`/`accessHash` method parameters. Extract fields for `buildInput*` inside the GramJS method.
+- Server updates enter through `src/api/gramjs/updates/mtpUpdateHandler.ts` and merge through `src/global/actions/apiUpdaters/`; update types live in `src/api/types/updates.ts`.
+
+## Commits and PRs
+
+- Use `[Tag] Component / Area: Imperative description` for commit messages and PR titles. Capitalize the area and description's first word; omit trailing periods and semicolons.
+- Optional tags: `[Refactoring]`, `[Perf]`, `[Size]`, `[Dev]`, `[SEO]`, `[CI]`, `[Security]`.
+- Prefer plain text, with backticks for programmatic names. Separate multiple tasks with semicolons; start each sentence with a capital letter.
+- Add `Closes #<issue_number>` to the PR description when addressing an issue.

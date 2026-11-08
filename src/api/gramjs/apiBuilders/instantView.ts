@@ -10,9 +10,11 @@ import type {
   ApiPageTableCell,
   ApiPageTableRow,
   ApiPhoto,
+  ApiRichButton,
   ApiRichText,
 } from '../../types';
 
+import { normalizeButtonText } from '../../../global/helpers/buttons';
 import {
   addDocumentToLocalDb,
   addMessageRepairInfo,
@@ -20,8 +22,9 @@ import {
   addWebPageRepairInfo,
   type MediaRepairContext,
 } from '../helpers/localDb';
+import { buildApiInlineButtonAction } from './buttons';
 import { buildApiPhoto } from './common';
-import { type ApiPageDocument, buildApiPageDocument } from './media';
+import { type ApiPageDocument, buildApiDocument, buildApiPageDocument } from './media';
 import { buildGeoPoint } from './messageContent';
 import { buildApiPeerId } from './peers';
 
@@ -32,7 +35,7 @@ type PageRepairContext = {
 
 type PageMediaContext = {
   photosById: Record<string, ApiPhoto>;
-  documentsById: Record<string, ApiPageDocument>;
+  documentsById: Record<string, GramJs.Document>;
 };
 
 export function buildApiInstantViewPage(page: GramJs.Page, webPage: GramJs.WebPage): ApiInstantViewPage {
@@ -64,7 +67,7 @@ export function buildApiPageMediaContext(
 
   return {
     photosById: buildApiPagePhotosById(photos, context),
-    documentsById: buildApiPageDocumentsById(documents, context),
+    documentsById: buildPageDocumentsById(documents, context),
   };
 }
 
@@ -83,16 +86,15 @@ function buildApiPagePhotosById(
   }, {});
 }
 
-function buildApiPageDocumentsById(
+function buildPageDocumentsById(
   documents: GramJs.TypeDocument[],
   context?: PageRepairContext,
-): Record<string, ApiPageDocument> {
+): PageMediaContext['documentsById'] {
   documents.forEach((document) => addPageDocumentToLocalDb(document, context));
 
-  return documents.reduce<Record<string, ApiPageDocument>>((acc, document) => {
-    const apiDocument = buildApiPageDocument(document);
-    if (document instanceof GramJs.Document && apiDocument) {
-      acc[String(document.id)] = apiDocument;
+  return documents.reduce<PageMediaContext['documentsById']>((acc, document) => {
+    if (document instanceof GramJs.Document) {
+      acc[String(document.id)] = document;
     }
 
     return acc;
@@ -100,6 +102,10 @@ function buildApiPageDocumentsById(
 }
 
 export function buildApiRichText(text: GramJs.TypeRichText, context: PageMediaContext): ApiRichText {
+  if (text instanceof GramJs.TextButton) {
+    return { type: 'button', ...buildApiRichButton(text, context) };
+  }
+
   if (text instanceof GramJs.TextEmpty) {
     return { type: 'empty' };
   }
@@ -230,6 +236,10 @@ export function buildApiRichText(text: GramJs.TypeRichText, context: PageMediaCo
     return { type: 'bankCard', text: buildApiRichText(text.text, context) };
   }
 
+  if (text instanceof GramJs.TextTonAddress) {
+    return { type: 'tonAddress', text: buildApiRichText(text.text, context) };
+  }
+
   if (text instanceof GramJs.TextMentionName) {
     return {
       type: 'mentionName',
@@ -258,6 +268,14 @@ export function buildApiRichText(text: GramJs.TypeRichText, context: PageMediaCo
 export function buildApiPageBlock(block: GramJs.TypePageBlock, context: PageMediaContext): ApiPageBlock {
   if (block instanceof GramJs.PageBlockUnsupported) {
     return { type: 'unsupported' };
+  }
+
+  if (block instanceof GramJs.PageBlockButtonRow) {
+    return {
+      type: 'buttonRow',
+      buttons: block.buttons.map((button) => buildApiRichButton(button, context)),
+      align: block.alignLeft ? 'left' : block.alignCenter ? 'center' : block.alignRight ? 'right' : undefined,
+    };
   }
 
   if (block instanceof GramJs.PageBlockTitle) {
@@ -313,6 +331,7 @@ export function buildApiPageBlock(block: GramJs.TypePageBlock, context: PageMedi
       type: 'blockquote',
       text: buildApiRichText(block.text, context),
       caption: buildApiRichText(block.caption, context),
+      canCollapse: block.collapsed,
     };
   }
 
@@ -436,6 +455,19 @@ export function buildApiPageBlock(block: GramJs.TypePageBlock, context: PageMedi
     };
   }
 
+  if (block instanceof GramJs.PageBlockDocument) {
+    const document = context.documentsById[block.documentId.toString()];
+    if (!document) {
+      return { type: 'unsupported' };
+    }
+
+    return {
+      type: 'document',
+      document: buildApiDocument(document)!,
+      caption: buildApiPageCaption(block.caption, context),
+    };
+  }
+
   if (block instanceof GramJs.PageBlockAudio) {
     const audio = getPageDocument(context, block.audioId);
     if (audio?.mediaType !== 'audio') {
@@ -456,6 +488,7 @@ export function buildApiPageBlock(block: GramJs.TypePageBlock, context: PageMedi
       rows: block.rows.map((row) => buildApiPageTableRow(row, context)),
       isBordered: block.bordered,
       isStriped: block.striped,
+      isCompact: block.compact,
     };
   }
 
@@ -633,7 +666,8 @@ function getPagePhoto(context: PageMediaContext, id: bigint): ApiPhoto | undefin
 }
 
 function getPageDocument(context: PageMediaContext, id: bigint): ApiPageDocument | undefined {
-  return context.documentsById[id.toString()];
+  const document = context.documentsById[id.toString()];
+  return document && buildApiPageDocument(document);
 }
 
 function addPagePhotoToLocalDb(photo: GramJs.TypePhoto, context?: PageRepairContext) {
@@ -656,4 +690,19 @@ function addPageDocumentToLocalDb(document: GramJs.TypeDocument, context?: PageR
   }
 
   addDocumentToLocalDb(repairableDocument);
+}
+
+function buildApiRichButton(
+  button: GramJs.TextButton | GramJs.PageButton,
+  context: PageMediaContext,
+): ApiRichButton {
+  const { style } = button;
+  return {
+    text: normalizeButtonText(buildApiRichText(button.text, context)),
+    action: buildApiInlineButtonAction(button.type),
+    style: style ? {
+      type: style.bgPrimary ? 'primary' : style.bgDanger ? 'destructive' : style.bgSuccess ? 'success' : undefined,
+      isLink: style.link,
+    } : undefined,
+  };
 }

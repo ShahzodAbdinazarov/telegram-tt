@@ -1,6 +1,6 @@
 import type { ElementRef, TeactNode } from '../../lib/teact/teact';
 
-import type { ApiMessageEntityFormattedDate, ApiRichText } from '../../api/types';
+import type { ApiMessageEntityFormattedDate, ApiRichText, ApiRichTextDate } from '../../api/types';
 import type { ObserveFn } from '../../hooks/useIntersectionObserver';
 import type { ThreadId } from '../../types';
 import { ApiMessageEntityTypes } from '../../api/types';
@@ -15,20 +15,24 @@ import CustomEmoji from '../common/CustomEmoji';
 import FormattedDate from '../common/FormattedDate';
 import SafeLink from '../common/SafeLink';
 import Spoiler from '../common/spoiler/Spoiler';
+import TonAddressLink from '../common/TonAddressLink';
 import MentionLink from '../middle/message/MentionLink';
 import InlineImage from './InlineImage';
 import Latex from './Latex';
+import RichButton from './RichButton';
 
 import styles from './RichContent.module.scss';
 
-type OwnProps = {
+export type RichTextProps = {
   text: ApiRichText;
+  isButtonLabel?: boolean;
   unsupportedText: string;
   containerId: string;
   pageUrl?: string;
   chatId?: string;
   messageId?: number;
   threadId?: ThreadId;
+  isProtected?: boolean;
   observeIntersectionForLoading?: ObserveFn;
   observeIntersectionForPlaying?: ObserveFn;
   sharedCanvasRef?: ElementRef<HTMLCanvasElement>;
@@ -37,18 +41,37 @@ type OwnProps = {
 
 const RichText = ({
   text,
+  isButtonLabel,
   unsupportedText,
   containerId,
   pageUrl,
   chatId,
   messageId,
   threadId,
+  isProtected,
   observeIntersectionForLoading,
   observeIntersectionForPlaying,
   sharedCanvasRef,
   sharedCanvasHqRef,
-}: OwnProps): TeactNode => {
+}: RichTextProps): TeactNode => {
   switch (text.type) {
+    case 'button':
+      return (
+        <RichButton
+          button={text}
+          chatId={chatId}
+          messageId={messageId}
+          threadId={threadId}
+          isInline
+          unsupportedText={unsupportedText}
+          containerId={containerId}
+          pageUrl={pageUrl}
+          observeIntersectionForLoading={observeIntersectionForLoading}
+          observeIntersectionForPlaying={observeIntersectionForPlaying}
+          sharedCanvasRef={sharedCanvasRef}
+          sharedCanvasHqRef={sharedCanvasHqRef}
+        />
+      );
     case 'empty':
       return undefined;
     case 'plain':
@@ -58,12 +81,14 @@ const RichText = ({
         <RichText
           key={index}
           text={part}
+          isButtonLabel={isButtonLabel}
           unsupportedText={unsupportedText}
           containerId={containerId}
           pageUrl={pageUrl}
           chatId={chatId}
           messageId={messageId}
           threadId={threadId}
+          isProtected={isProtected}
           observeIntersectionForLoading={observeIntersectionForLoading}
           observeIntersectionForPlaying={observeIntersectionForPlaying}
           sharedCanvasRef={sharedCanvasRef}
@@ -200,12 +225,18 @@ const RichText = ({
       return (
         <FormattedDate
           entity={buildDateEntity(text)}
+          asPreview={isButtonLabel}
           chatId={chatId}
           messageId={messageId}
         >
           {renderNestedText()}
         </FormattedDate>
       );
+    case 'tonAddress': {
+      const address = getRichTextPlainText(text.text);
+
+      return <TonAddressLink address={address} noCopy={isProtected}>{renderNestedText()}</TonAddressLink>;
+    }
     case 'hashtag':
     case 'botCommand':
     case 'cashtag':
@@ -229,12 +260,14 @@ const RichText = ({
     return (
       <RichText
         text={getNestedRichText(text)}
+        isButtonLabel={isButtonLabel}
         unsupportedText={unsupportedText}
         containerId={containerId}
         pageUrl={pageUrl}
         chatId={chatId}
         messageId={messageId}
         threadId={threadId}
+        isProtected={isProtected}
         observeIntersectionForLoading={observeIntersectionForLoading}
         observeIntersectionForPlaying={observeIntersectionForPlaying}
         sharedCanvasRef={sharedCanvasRef}
@@ -384,7 +417,7 @@ function openDetailsAncestors(element: HTMLElement) {
   }
 }
 
-function buildDateEntity(text: Extract<ApiRichText, { type: 'date' }>): ApiMessageEntityFormattedDate {
+function buildDateEntity(text: ApiRichTextDate): ApiMessageEntityFormattedDate {
   const renderedText = getRichTextPlainText(text.text);
 
   return {

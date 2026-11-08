@@ -140,14 +140,16 @@ function updateStreams() {
   });
 }
 
-function logP2p(message: string, data: Record<string, unknown> = {}) {
+function logP2p<Data extends object>(message: string, data?: Data) {
   if (!DEBUG_CALLS) return;
 
-  logDebugMessage('debug', `[PhoneCall][P2P] ${message}`, JSON.stringify(data), data);
+  const debugData = data || {};
+  logDebugMessage('debug', `[PhoneCall][P2P] ${message}`, JSON.stringify(debugData), debugData);
 }
 
-function logP2pWarning(message: string, data: Record<string, unknown> = {}) {
-  logDebugMessage('warn', `[PhoneCall][P2P] ${message}`, JSON.stringify(data), data);
+function logP2pWarning<Data extends object>(message: string, data?: Data) {
+  const debugData = data || {};
+  logDebugMessage('warn', `[PhoneCall][P2P] ${message}`, JSON.stringify(debugData), debugData);
 }
 
 function getUserStream(streamType: StreamType, facing: VideoFacingModeEnum = 'user') {
@@ -2077,8 +2079,8 @@ async function tryAddCandidate(
     // eslint-disable-next-line no-null/no-null
     && (rtcCandidate.sdpMLineIndex === undefined || rtcCandidate.sdpMLineIndex === null)
   ) {
-    const fallbackMLineIndex = getLegacyCandidateMLineIndex(connection);
-    if (fallbackMLineIndex === undefined) {
+    const bundleMid = getRemoteBundleMid(connection);
+    if (bundleMid === undefined) {
       logP2p('drop ICE candidate without media id', {
         candidate: rtcCandidate,
         remoteSdpSummary: getRemoteSdpSummary(connection),
@@ -2086,7 +2088,7 @@ async function tryAddCandidate(
       return;
     }
 
-    rtcCandidate.sdpMLineIndex = fallbackMLineIndex;
+    rtcCandidate.sdpMid = bundleMid;
   }
 
   await addIceCandidate(connection, rtcCandidate);
@@ -2105,33 +2107,9 @@ async function addIceCandidate(connection: RTCPeerConnection, candidate: RTCIceC
   }
 }
 
-function getLegacyCandidateMLineIndex(connection: RTCPeerConnection) {
+function getRemoteBundleMid(connection: RTCPeerConnection) {
   const sdp = connection.remoteDescription?.sdp;
-  if (!sdp) {
-    return undefined;
-  }
-
-  const mediaSections = parseSdpSections(sdp).filter((section) => {
-    return section.kind !== 'session';
-  });
-  const activeMediaSections = mediaSections.filter((section) => {
-    return getSdpPort(section) !== 0;
-  });
-  const activeRtpMediaSections = activeMediaSections.filter((section) => {
-    return section.kind === 'audio' || section.kind === 'video';
-  });
-
-  if (activeMediaSections.length === 1) {
-    return mediaSections.indexOf(activeMediaSections[0]);
-  }
-
-  if (activeRtpMediaSections.length === 1 && activeMediaSections.every((section) => {
-    return section.kind === 'application' || section === activeRtpMediaSections[0];
-  })) {
-    return mediaSections.indexOf(activeRtpMediaSections[0]);
-  }
-
-  return undefined;
+  return sdp ? parseBundleMids(sdp)?.[0] : undefined;
 }
 
 function getCandidateUfrag(candidate: QueuedP2pCandidate) {

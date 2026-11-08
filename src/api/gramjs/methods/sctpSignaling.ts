@@ -69,12 +69,18 @@ export class SctpSignaling {
 
   private reassembly?: Uint8Array[];
 
+  constructor(private isInitiator: boolean) {}
+
   wrapPayload(payload: Uint8Array) {
     if (this.isEstablished && this.peerTag !== undefined) {
       return Array.from(this.createDataPacket(payload));
     }
 
     this.pendingPayloads.push(payload);
+    if (!this.isInitiator) {
+      return undefined;
+    }
+
     if (!this.initSent) {
       return this.createInitRetryPacket();
     }
@@ -651,11 +657,11 @@ function crc32c(data: Uint8Array) {
   return (~crc) >>> 0;
 }
 
-function logSctp(message: string, data: Record<string, unknown> = {}) {
+function logSctp<Data extends object>(message: string, data?: Data) {
   if (!DEBUG_CALLS) {
     return;
   }
 
   // eslint-disable-next-line no-console
-  console.debug(`[PhoneCall][SCTP] ${message}`, data);
+  console.debug(`[PhoneCall][SCTP] ${message}`, data || {});
 }

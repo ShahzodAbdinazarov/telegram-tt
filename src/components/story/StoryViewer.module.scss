@@ -398,7 +398,7 @@
 .sender {
   position: absolute;
   z-index: 2;
-  top: 1.25rem;
+  top: 0.875rem;
   right: 0.5rem;
   left: 1rem;
 
@@ -409,12 +409,16 @@
 }
 
 .senderInfoTransition {
-  position: absolute;
+  flex: 1;
+  min-width: 0;
+  /* Slides are detached from the flow while animating, so the height has to be explicit */
+  height: 2.5rem;
 }
 
 .senderInfo {
   display: flex;
   align-items: center;
+  height: 100%;
 }
 
 .senderMeta {
@@ -485,6 +489,7 @@
 
 .actions {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   margin-inline-start: auto;
 
@@ -585,6 +590,76 @@
   border-radius: 0 0 var(--border-radius-default-small) var(--border-radius-default-small);
 }
 
+.captionWithMusic {
+  bottom: calc(6.75rem + env(safe-area-inset-bottom));
+}
+
+.musicMenu {
+  position: absolute;
+  z-index: 2;
+  bottom: calc(4.25rem + env(safe-area-inset-bottom));
+  left: 0.75rem;
+
+  max-width: calc(100% - 1.5rem);
+}
+
+.music {
+  cursor: var(--custom-cursor, pointer);
+
+  display: flex;
+  align-items: center;
+
+  max-width: 100%;
+  padding: 0 0.75rem 0 0.5rem;
+  padding-block: 0.125rem;
+  border: none;
+  border-radius: 1rem;
+
+  font-size: 0.8125rem;
+  color: var(--color-white);
+
+  background-color: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(1.25rem);
+  outline: none;
+
+  transition: background-color 150ms;
+
+  &:hover,
+  &.musicActive {
+    background-color: rgba(0, 0, 0, 0.45);
+  }
+}
+
+.musicIcon {
+  flex-shrink: 0;
+  margin-inline-end: 0.375rem;
+  font-size: 1rem;
+}
+
+.musicTitle,
+.musicPerformer {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.musicTitle {
+  flex-shrink: 0;
+  max-width: 70%;
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+}
+
+.musicPerformer {
+  flex-shrink: 1;
+
+  min-width: 0;
+  margin-inline-start: 0.25rem;
+
+  text-overflow: ellipsis;
+
+  opacity: 0.7;
+}
+
 .captionInner {
   scrollbar-gutter: stable;
 
@@ -670,22 +745,31 @@
 .composer {
   --color-background: #212121;
   --color-placeholders: #707478;
-  --color-composer-button: #707478;
+  --color-composer-button: var(--color-white);
+  --story-composer-inset: 0;
+  --story-composer-focused-inset: -4rem;
 
   position: absolute;
   z-index: 3;
+  right: 0;
   bottom: 0;
   left: 0;
 
-  height: 3rem;
-  margin-bottom: 0;
+  min-height: 3rem;
+  margin: 0 var(--story-composer-inset);
 
-  transition: transform var(--layer-transition), opacity 0.15s ease;
+  /* stylelint-disable-next-line plugin/no-low-performance-animation-properties */
+  transition: transform var(--layer-transition), opacity 0.15s ease, margin 200ms ease-out;
+
+  &:global(.is-story-composer-focused) {
+    --story-composer-inset: var(--story-composer-focused-inset);
+  }
 
   &:global(.Composer) {
+    width: auto;
+
     @media (max-width: 600px) {
-      margin-bottom: env(safe-area-inset-bottom);
-      padding: 0 0.5rem 0.5rem;
+      margin-bottom: calc(0.5rem + env(safe-area-inset-bottom));
     }
   }
 
@@ -706,10 +790,6 @@
     max-width: 100%;
   }
 
-  :global(.message-input-wrapper .recording-state) {
-    color: #fff;
-  }
-
   :global(.SymbolMenu-footer .Button.activated) {
     --color-text: #fff;
   }
@@ -722,6 +802,19 @@
 
   :global(.is-symbol-menu-open) & {
     transform: translate3d(0, calc(-1 * (var(--symbol-menu-height))), 0);
+  }
+
+  :global(body.no-message-composer-animations) & {
+    transition: none;
+  }
+
+  @media (max-width: 925px) {
+    --story-composer-focused-inset: 0;
+  }
+
+  @media (max-width: 600px) {
+    --story-composer-inset: 0.5rem;
+    --story-composer-focused-inset: 0.5rem;
   }
 }
 

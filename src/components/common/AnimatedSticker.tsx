@@ -1,4 +1,3 @@
-import Color from 'colorjs.io';
 import type { ElementRef } from '../../lib/teact/teact';
 import {
   getIsHeavyAnimating,
@@ -9,10 +8,12 @@ import {
   useUnmountCleanup,
 } from '../../lib/teact/teact';
 
-import type RLottieInstance from '../../lib/rlottie/RLottie';
+import type TLottieInstance from '../../lib/tlottie/TLottie';
+import type { EmojiFitzModifier } from '../../util/emoji/skinTone';
 
+import { buildColor, type Color } from '../../lib/color';
 import { requestMeasure } from '../../lib/fasterdom/fasterdom';
-import { ensureRLottie, getRLottie } from '../../lib/rlottie/RLottie.async';
+import { ensureTLottie, getTLottie } from '../../lib/tlottie/TLottie.async';
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import buildClassName from '../../util/buildClassName';
 import buildStyle from '../../util/buildStyle';
@@ -45,6 +46,7 @@ export type OwnProps = {
   size: number;
   quality?: number;
   color?: string;
+  fitzModifier?: EmojiFitzModifier;
   isLowPriority?: boolean;
   forceAlways?: boolean;
   forceOnHeavyAnimation?: boolean;
@@ -76,6 +78,7 @@ const AnimatedSticker = ({
   quality,
   isLowPriority,
   color,
+  fitzModifier,
   forceAlways,
   forceOnHeavyAnimation,
   sharedCanvas,
@@ -94,9 +97,10 @@ const AnimatedSticker = ({
   }
 
   const viewId = useUniqueId();
+  const rendererId = renderId && fitzModifier ? `${renderId}_${fitzModifier}` : renderId;
 
-  const [animation, setAnimation] = useState<RLottieInstance>();
-  const animationRef = useRef<RLottieInstance>();
+  const [animation, setAnimation] = useState<TLottieInstance>();
+  const animationRef = useRef<TLottieInstance>();
   const isFirstRenderRef = useRef(true);
 
   const shouldUseColorFilter = !sharedCanvas && color;
@@ -120,7 +124,7 @@ const AnimatedSticker = ({
 
   useSyncEffect(() => {
     if (color && !shouldUseColorFilter) {
-      colorRef.current = new Color(color);
+      colorRef.current = buildColor(color);
     } else {
       colorRef.current = undefined;
     }
@@ -147,16 +151,22 @@ const AnimatedSticker = ({
       return;
     }
 
-    const newAnimation = getRLottie().init(
+    const TLottie = getTLottie();
+    if (!TLottie) {
+      return;
+    }
+
+    const newAnimation = TLottie.init(
       tgsUrl,
       container,
-      renderId || generateUniqueId(),
+      rendererId || generateUniqueId(),
       {
         size,
         noLoop,
         quality,
         isLowPriority,
         coords: sharedCanvasCoords,
+        fitzModifier,
       },
       viewId,
       colorRef.current,
@@ -180,10 +190,10 @@ const AnimatedSticker = ({
 
   useEffect(() => {
     if (!canInitialize) return;
-    if (getRLottie()) {
+    if (getTLottie()) {
       init();
     } else {
-      ensureRLottie().then(init);
+      ensureTLottie().then(init);
     }
   }, [init, tgsUrl, sharedCanvas, sharedCanvasCoords, canInitialize]);
 
@@ -208,7 +218,7 @@ const AnimatedSticker = ({
     if (
       !animation
       || !(playRef.current || playSegmentRef.current)
-      || isFrozen(forceAlways)
+      || isFrozen(forceAlways, forceOnHeavyAnimation)
     ) {
       return;
     }
@@ -263,11 +273,11 @@ const AnimatedSticker = ({
       if (isFirstRenderRef.current) {
         isFirstRenderRef.current = false;
       } else if (tgsUrl) {
-        animation.changeData(tgsUrl);
+        animation.changeData(tgsUrl, fitzModifier);
         playAnimation();
       }
     }
-  }, [playAnimation, animation, tgsUrl]);
+  }, [playAnimation, animation, tgsUrl, fitzModifier]);
 
   useHeavyAnimation(pauseAnimation, playAnimation, !playKey || shouldForceOnHeavyAnimation);
   usePriorityPlaybackCheck(pauseAnimation, playAnimation, !playKey || forceAlways);

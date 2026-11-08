@@ -1,8 +1,8 @@
-import type { FC } from '../../lib/teact/teact';
 import { memo, useEffect, useState } from '../../lib/teact/teact';
 import { getActions, withGlobal } from '../../global';
 
 import type { ApiChat } from '../../api/types';
+import type { TabState } from '../../global/types';
 import type { MessageListType } from '../../types';
 import type { IconName } from '../../types/icons';
 
@@ -21,8 +21,9 @@ import buildClassName from '../../util/buildClassName';
 import captureKeyboardListeners from '../../util/captureKeyboardListeners';
 
 import useFlag from '../../hooks/useFlag';
+import useFrozenProps from '../../hooks/useFrozenProps';
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 import usePreviousDeprecated from '../../hooks/usePreviousDeprecated';
 import useCopySelectedMessages from './hooks/useCopySelectedMessages';
 
@@ -50,11 +51,12 @@ type StateProps = {
   hasProtectedMessage?: boolean;
   isAnyModalOpen?: boolean;
   selectedMessageIds?: number[];
+  reportContext?: NonNullable<TabState['selectedMessages']>['reportContext'];
   shouldWarnAboutFiles?: boolean;
   hasIpRevealingMedia?: boolean;
 };
 
-const MessageSelectToolbar: FC<OwnProps & StateProps> = ({
+const MessageSelectToolbar = ({
   chat,
   canPost,
   isActive,
@@ -68,22 +70,22 @@ const MessageSelectToolbar: FC<OwnProps & StateProps> = ({
   hasProtectedMessage,
   isAnyModalOpen,
   selectedMessageIds,
+  reportContext,
   shouldWarnAboutFiles,
   hasIpRevealingMedia,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     exitMessageSelectMode,
     openForwardMenuForSelectedMessages,
     downloadSelectedMessages,
     copySelectedMessages,
-    showNotification,
     reportMessages,
     openDeleteMessageModal,
     setSharedSettingOption,
   } = getActions();
-  const lang = useOldLang();
+  const lang = useLang();
 
-  useCopySelectedMessages(isActive);
+  useCopySelectedMessages(Boolean(isActive && !reportContext));
 
   const [isFileIpDialogOpen, openFileIpDialog, closeFileIpDialog] = useFlag();
   const [shouldNotWarnAboutFiles, setShouldNotWarnAboutFiles] = useState(false);
@@ -104,21 +106,18 @@ const MessageSelectToolbar: FC<OwnProps & StateProps> = ({
   useEffect(() => {
     return isActive && !isAnyModalOpen
       ? captureKeyboardListeners({
-        onBackspace: canDeleteMessages ? handleDelete : undefined,
-        onDelete: canDeleteMessages ? handleDelete : undefined,
+        onBackspace: !reportContext && canDeleteMessages ? handleDelete : undefined,
+        onDelete: !reportContext && canDeleteMessages ? handleDelete : undefined,
         onEsc: handleExitMessageSelectMode,
       })
       : undefined;
   }, [
     isActive, handleDelete, handleExitMessageSelectMode, isAnyModalOpen,
-    canDeleteMessages,
+    canDeleteMessages, reportContext,
   ]);
 
   const handleCopy = useLastCallback(() => {
-    copySelectedMessages();
-    showNotification({
-      message: lang('Share.Link.Copied'),
-    });
+    copySelectedMessages({ shouldNotify: true });
     exitMessageSelectMode();
   });
 
@@ -145,7 +144,24 @@ const MessageSelectToolbar: FC<OwnProps & StateProps> = ({
   const prevSelectedMessagesCount = usePreviousDeprecated(selectedMessagesCount || undefined, true);
   const renderingSelectedMessagesCount = isActive ? selectedMessagesCount : prevSelectedMessagesCount;
 
-  const formattedMessagesCount = lang('VoiceOver.Chat.MessagesSelected', renderingSelectedMessagesCount, 'i');
+  const formattedMessagesCount = lang('VoiceOverChatMessagesSelected', {
+    count: renderingSelectedMessagesCount || 0,
+  }, { pluralValue: renderingSelectedMessagesCount || 0 });
+
+  const rendering = useFrozenProps({
+    selectedMessagesCount,
+    canDeleteMessages,
+    canReportMessages,
+    canDownloadMessages,
+    canForwardMessages,
+    hasProtectedMessage,
+    messageListType,
+    reportContext,
+  }, !isActive);
+  const reportTitle = rendering.reportContext?.title || lang('ReportPeerReport');
+  const reportSubtitle = rendering.selectedMessagesCount
+    ? formattedMessagesCount
+    : lang('ReportChatMessagesRequired');
 
   const openMessageReport = useLastCallback(() => {
     if (!selectedMessageIds || !chat) return;
@@ -154,6 +170,16 @@ const MessageSelectToolbar: FC<OwnProps & StateProps> = ({
       messageIds: selectedMessageIds,
     });
     exitMessageSelectMode();
+  });
+
+  const submitMessageReport = useLastCallback(() => {
+    if (!selectedMessageIds?.length || !chat || !reportContext) return;
+    reportMessages({
+      chatId: chat.id,
+      messageIds: selectedMessageIds,
+      description: reportContext.description,
+      option: reportContext.option,
+    });
   });
 
   const className = buildClassName(
@@ -187,37 +213,59 @@ const MessageSelectToolbar: FC<OwnProps & StateProps> = ({
     <>
       <div className={className}>
         <div className="MessageSelectToolbar-inner">
-          <Button
-            color="translucent"
-            round
-            onClick={handleExitMessageSelectMode}
-            ariaLabel="Exit select mode"
-            iconName="close"
-          />
-          <span className="MessageSelectToolbar-count" title={formattedMessagesCount}>
-            {formattedMessagesCount}
-          </span>
-
-          {Boolean(selectedMessagesCount) && (
-            <div className="MessageSelectToolbar-actions">
-              {messageListType !== 'scheduled' && canForwardMessages && (
-                renderButton(
-                  'forward', lang('Chat.ForwardActionHeader'), openForwardMenuForSelectedMessages,
-                )
-              )}
-              {canReportMessages && (
-                renderButton('flag', lang('Conversation.ReportMessages'), openMessageReport)
-              )}
-              {canDownloadMessages && !hasProtectedMessage && (
-                renderButton('download', lang('lng_media_download'), handleMessageDownload)
-              )}
-              {!hasProtectedMessage && (
-                renderButton('copy', lang('lng_context_copy_selected_items'), handleCopy)
-              )}
-              {canDeleteMessages && (
+          {rendering.reportContext ? (
+            <>
+              {renderButton('close', lang('Close'), handleExitMessageSelectMode)}
+              <div className="MessageSelectToolbar-reportText">
+                <span
+                  className="MessageSelectToolbar-reportTitle"
+                  title={reportTitle}
+                >
+                  {reportTitle}
+                </span>
+                <span className="MessageSelectToolbar-reportSubtitle" title={reportSubtitle}>
+                  {reportSubtitle}
+                </span>
+              </div>
+              <Button
+                size="smaller"
+                color="primary"
+                className="MessageSelectToolbar-reportButton"
+                disabled={!rendering.selectedMessagesCount || rendering.reportContext.isSubmitting}
+                onClick={submitMessageReport}
+                noForcedUpperCase
+              >
+                {lang('ReportButton')}
+              </Button>
+            </>
+          ) : (
+            <>
+              {Boolean(rendering.selectedMessagesCount) && rendering.canDeleteMessages && (
                 renderButton('delete', lang('EditAdminGroupDeleteMessages'), handleDelete, true)
               )}
-            </div>
+              <span className="MessageSelectToolbar-count" title={formattedMessagesCount}>
+                {formattedMessagesCount}
+              </span>
+
+              {Boolean(rendering.selectedMessagesCount) && (
+                <div className="MessageSelectToolbar-actions">
+                  {rendering.canReportMessages && (
+                    renderButton('flag', lang('ConversationReportMessages'), openMessageReport)
+                  )}
+                  {rendering.canDownloadMessages && !rendering.hasProtectedMessage && (
+                    renderButton('download', lang('AccActionDownload'), handleMessageDownload)
+                  )}
+                  {!rendering.hasProtectedMessage && (
+                    renderButton('copy', lang('ContextCopySelectedItems'), handleCopy)
+                  )}
+                  {rendering.messageListType !== 'scheduled' && rendering.canForwardMessages && (
+                    renderButton(
+                      'forward', lang('ChatForwardActionHeader'), openForwardMenuForSelectedMessages,
+                    )
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -226,11 +274,11 @@ const MessageSelectToolbar: FC<OwnProps & StateProps> = ({
         onClose={closeFileIpDialog}
         confirmHandler={handleFileIpConfirm}
       >
-        {lang('lng_launch_svg_warning')}
+        {lang('LaunchSvgWarning')}
         <Checkbox
           className="dialog-checkbox"
           checked={shouldNotWarnAboutFiles}
-          label={lang('lng_launch_exe_dont_ask')}
+          label={lang('LaunchExeDontAsk')}
           onCheck={setShouldNotWarnAboutFiles}
         />
       </ConfirmDialog>
@@ -249,7 +297,7 @@ export default memo(withGlobal<OwnProps>(
     const { canDelete } = selectCanDeleteSelectedMessages(global);
     const canReport = Boolean(!isSchedule && selectCanReportSelectedMessages(global));
     const canDownload = selectCanDownloadSelectedMessages(global);
-    const { messageIds: selectedMessageIds } = tabState.selectedMessages || {};
+    const { messageIds: selectedMessageIds, reportContext } = tabState.selectedMessages || {};
     const hasProtectedMessage = chatId ? selectHasProtectedMessage(global, chatId, selectedMessageIds) : false;
     const canForward = !isSchedule && chatId ? selectCanForwardMessages(global, chatId, selectedMessageIds) : false;
     const hasIpRevealingMedia = selectedMessageIds && chatId
@@ -268,6 +316,7 @@ export default memo(withGlobal<OwnProps>(
       canDownloadMessages: canDownload,
       canForwardMessages: canForward,
       selectedMessageIds,
+      reportContext,
       hasProtectedMessage,
       isAnyModalOpen,
       shouldWarnAboutFiles,

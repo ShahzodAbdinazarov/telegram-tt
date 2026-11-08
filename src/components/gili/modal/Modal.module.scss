@@ -3,9 +3,9 @@
     --modal-max-width: 35rem;
     --modal-max-height: min(92dvh, 50rem);
     --modal-header-height: 3.5rem;
-    --modal-content-block-padding: 0.5rem;
+    --modal-content-block-padding: 1rem;
     --modal-scroll-fade-size: 0rem;
-    --modal-border-radius: 1.75rem;
+    --modal-border-radius: var(--border-radius-modal);
     --modal-background-color: var(--color-background-secondary);
 
     user-select: none;
@@ -128,6 +128,8 @@
     background-color: var(--modal-background-color);
     box-shadow: 0 0.625rem 2rem rgb(0 0 0 / 18%);
 
+    corner-shape: squircle;
+
     &:has(.scrollMask) {
       --modal-scroll-fade-size: 1rem;
 
@@ -184,7 +186,7 @@
     align-items: center;
 
     min-height: var(--modal-header-height);
-    padding: 0.5rem 1rem;
+    padding: 0.75rem;
 
     background-color: var(--color-background-secondary);
   }
@@ -243,6 +245,10 @@
     margin-top: 1rem;
   }
 
+  .footerActionsVertical {
+    flex-direction: column;
+  }
+
   .closeButton {
     grid-column: 1;
     grid-row: 1 / -1;
@@ -252,8 +258,8 @@
   .closeButtonAbsolute {
     position: absolute;
     z-index: 2;
-    top: 0.75rem;
     inset-inline-start: 0.75rem;
+    top: 0.75rem;
   }
 
   @keyframes panelOpen {

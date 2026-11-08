@@ -1,6 +1,5 @@
-import type { FC } from '../../../lib/teact/teact';
 import {
-  memo, useCallback, useMemo,
+  memo, useMemo,
 } from '../../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../../global';
 
@@ -10,8 +9,9 @@ import { selectChat, selectTabState } from '../../../global/selectors';
 import { selectChatGroupCall } from '../../../global/selectors/calls';
 import buildClassName from '../../../util/buildClassName';
 
-import useCurrentOrPrev from '../../../hooks/useCurrentOrPrev';
-import useOldLang from '../../../hooks/useOldLang';
+import useFrozenProps from '../../../hooks/useFrozenProps';
+import useLang from '../../../hooks/useLang';
+import useLastCallback from '../../../hooks/useLastCallback';
 import useHeaderPane, { type PaneState } from '../../middle/hooks/useHeaderPane';
 
 import AvatarList from '../../common/AvatarList';
@@ -32,24 +32,18 @@ type StateProps = {
 
 const PREVIEW_AVATARS_COUNT = 3;
 
-const GroupCallTopPane: FC<OwnProps & StateProps> = ({
+const GroupCallTopPane = ({
   chatId,
   isActive,
   className,
   groupCall,
   onPaneStateChange,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     requestMasterAndJoinGroupCall,
   } = getActions();
 
-  const lang = useOldLang();
-
-  const handleJoinGroupCall = useCallback(() => {
-    requestMasterAndJoinGroupCall({
-      chatId,
-    });
-  }, [requestMasterAndJoinGroupCall, chatId]);
+  const lang = useLang();
 
   const participants = groupCall?.participants;
 
@@ -68,13 +62,27 @@ const GroupCallTopPane: FC<OwnProps & StateProps> = ({
       .filter(Boolean);
   }, [participants]);
 
-  const renderingParticipantCount = useCurrentOrPrev(groupCall?.participantsCount, true);
-  const renderingFetchedParticipants = useCurrentOrPrev(fetchedParticipants, true);
-
   const isRendering = Boolean(groupCall && isActive);
+
+  const {
+    chatId: renderingChatId,
+    participantsCount: renderingParticipantCount,
+    fetchedParticipants: renderingFetchedParticipants,
+  } = useFrozenProps({
+    chatId,
+    participantsCount: groupCall?.participantsCount,
+    fetchedParticipants,
+  }, !isRendering);
+
+  const handleJoinGroupCall = useLastCallback(() => {
+    requestMasterAndJoinGroupCall({
+      chatId: renderingChatId,
+    });
+  });
 
   const { ref, shouldRender } = useHeaderPane({
     isOpen: isRendering,
+    measureKey: chatId,
     onStateChange: onPaneStateChange,
   });
 
@@ -91,7 +99,11 @@ const GroupCallTopPane: FC<OwnProps & StateProps> = ({
     >
       <div className="info">
         <span className="title">{lang('VoipGroupVoiceChat')}</span>
-        <span className="participants">{lang('Participants', renderingParticipantCount ?? 0, 'i')}</span>
+        <span className="participants">
+          {lang('Participants', {
+            count: lang.number(renderingParticipantCount ?? 0),
+          }, { pluralValue: renderingParticipantCount ?? 0 })}
+        </span>
       </div>
       {Boolean(renderingFetchedParticipants?.length) && (
         <AvatarList size="small" peers={renderingFetchedParticipants} className="avatars" />

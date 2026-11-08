@@ -1,5 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
-import type React from '../../lib/teact/teact';
 import {
   memo,
   useEffect,
@@ -24,8 +22,8 @@ import {
 } from '../../global/selectors';
 import buildClassName from '../../util/buildClassName';
 import buildStyle from '../../util/buildStyle';
-import { formatPastDatetime, formatRegistrationMonth } from '../../util/dates/oldDateFormat';
 import { isoToEmoji } from '../../util/emoji/emoji';
+import { formatRegistrationMonth, formatRelativeAge, secondsToDate } from '../../util/localization/dateFormat';
 import { getCountryCodeByIso } from '../../util/phoneNumber';
 import stopEvent from '../../util/stopEvent';
 import renderText from '../common/helpers/renderText';
@@ -33,7 +31,6 @@ import renderText from '../common/helpers/renderText';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useMedia from '../../hooks/useMedia';
-import useOldLang from '../../hooks/useOldLang';
 
 import AvatarList from '../common/AvatarList';
 import Icon from '../common/icons/Icon';
@@ -58,7 +55,7 @@ type StateProps = {
   userFullInfo?: ApiUserFullInfo;
 };
 
-const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
+const MessageListAccountInfo = ({
   chat,
   chatId,
   botInfo,
@@ -67,9 +64,9 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
   commonChats,
   userFullInfo,
   hasMessages,
-}) => {
+}: OwnProps & StateProps) => {
   const { loadCommonChats, openChatWithInfo } = getActions();
-  const oldLang = useOldLang();
+
   const lang = useLang();
 
   const {
@@ -111,7 +108,7 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
       <span>
         {lang('UserUpdatedName', {
           user: chat.title,
-          time: formatPastDatetime(lang, nameChangeDate),
+          time: formatRelativeAge(lang, secondsToDate(nameChangeDate)),
         }, { withNodes: true, withMarkdown: true })}
       </span>
     </div>
@@ -122,7 +119,7 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
       <span>
         {lang('UserUpdatedPhoto', {
           user: chat.title,
-          time: formatPastDatetime(lang, photoChangeDate),
+          time: formatRelativeAge(lang, secondsToDate(photoChangeDate)),
         }, { withNodes: true, withMarkdown: true })}
       </span>
     </div>
@@ -132,19 +129,19 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
     const entries: TableEntry[] = [];
     if (country) {
       entries.push([
-        oldLang('PrivacyPhone'),
+        lang('PrivacyPhone'),
         <span className={styles.chatDescription}>
           <span className={styles.country}>
             {renderText(isoToEmoji(country?.iso2))}
           </span>
-          {country?.defaultName}
+          {lang.region(country.iso2) || country.defaultName}
         </span>,
       ]);
     }
     if (registrationMonth) {
       entries.push([
         lang('ContactInfoRegistration'),
-        formatRegistrationMonth(lang.code, registrationMonth),
+        formatRegistrationMonth(lang, registrationMonth),
       ]);
     }
     if (userFullInfo?.commonChatsCount) {
@@ -166,13 +163,13 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
       ]);
     }
     return entries;
-  }, [lang, oldLang, country, registrationMonth, commonChats, userFullInfo]);
+  }, [lang, country, registrationMonth, commonChats, userFullInfo]);
 
   return (
     <div className={buildClassName(styles.root, 'empty')}>
-      {isLoadingFullUser && isChatInfoEmpty && <span>{oldLang('Loading')}</span>}
+      {isLoadingFullUser && isChatInfoEmpty && <span>{lang('Loading')}</span>}
       {(isBotInfoEmpty && isChatInfoEmpty) && !isLoadingFullUser && !hasMessages && (
-        <span>{oldLang('NoMessages')}</span>
+        <span>{lang('NoMessages')}</span>
       )}
       {botInfo && (
         <div
@@ -187,7 +184,7 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
               src={botInfoPhotoUrl}
               width={width}
               height={height}
-              alt="Bot info"
+              alt={lang('BotInfoImageAlt')}
             />
           )}
           {botInfoGifUrl && (
@@ -213,12 +210,12 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
           )}
           {isVerifyCodes && (
             <div className={styles.botInfoDescription}>
-              {oldLang('VerifyChatInfo')}
+              {lang('VerifyChatInfo')}
             </div>
           )}
           {!isVerifyCodes && botInfo.description && (
             <div className={styles.botInfoDescription}>
-              <p className={styles.botInfoTitle}>{oldLang('BotInfoTitle')}</p>
+              <p className={styles.botInfoTitle}>{lang('BotInfoTitle')}</p>
               {renderText(botInfo.description, ['br', 'emoji', 'links'])}
             </div>
           )}
@@ -248,7 +245,7 @@ const MessageListAccountInfo: FC<OwnProps & StateProps> = ({
 };
 
 export default memo(withGlobal<OwnProps>(
-  (global, { chatId }) => {
+  (global, { chatId }): Complete<StateProps> => {
     const {
       countryList: { phoneCodes: phoneCodeList },
     } = global;

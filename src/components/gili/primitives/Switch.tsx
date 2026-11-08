@@ -81,7 +81,7 @@ const Switch = ({
       <span className={styles.track} aria-hidden>
         <span className={styles.thumb}>
           <ShowTransition isOpen={Boolean(locked)} className={styles.lockIconTransition}>
-            <Icon name="lock-badge" className={styles.lockIcon} />
+            <Icon name="lock-filled" className={styles.lockIcon} />
           </ShowTransition>
         </span>
       </span>

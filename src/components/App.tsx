@@ -5,21 +5,31 @@ import type { GlobalState } from '../global/types';
 import type { ThemeKey } from '../types';
 import type { UiLoaderPage } from './common/UiLoader';
 
-import { DARK_THEME_BG_COLOR, INACTIVE_MARKER, LIGHT_THEME_BG_COLOR, PAGE_TITLE, PAGE_TITLE_TAURI } from '../config';
+import {
+  DARK_THEME_BG_COLOR, LIGHT_THEME_BG_COLOR, PAGE_TITLE, PAGE_TITLE_TAURI,
+} from '../config';
 import { forceMutation } from '../lib/fasterdom/stricterdom.ts';
-import { selectActionMessageBg, selectTabState, selectTheme } from '../global/selectors';
+import {
+  selectActionMessageBg, selectTabState, selectTheme, selectThemeValues,
+} from '../global/selectors';
 import { IS_TAURI } from '../util/browser/globalEnvironment';
 import { IS_INSTALL_PROMPT_SUPPORTED, PLATFORM_ENV } from '../util/browser/windowEnvironment';
 import buildClassName from '../util/buildClassName';
 import { setupBeforeInstallPrompt } from '../util/installPrompt';
-import { ACCOUNT_SLOT, getAccountsInfo, getAccountSlotUrl } from '../util/multiaccount';
-import { hasEncryptedSession } from '../util/passcode';
-import { getInitialLocationHash, parseInitialLocationHash } from '../util/routing';
+import { ACCOUNT_SLOT, getAccountSlotUrl, getFirstLoggedInAccountSlot } from '../util/multiaccount';
+import { hasLegacyEncryptedSession } from '../util/passcode';
+import { getInitialLocationHash, getPendingWebLogin } from '../util/routing';
 import { checkSessionLocked, hasStoredSession } from '../util/sessions';
+import { getActionMessageBg, getWallpaperBaseColor } from '../util/wallpaper';
+import { handoffWebLogin } from '../util/webLoginHandoff';
 import { updateSizes } from '../util/windowSize';
 
 import useTauriDrag from '../hooks/tauri/useTauriDrag';
 import useAppLayout from '../hooks/useAppLayout';
+import useFileHoverOpen, {
+  FILE_HOVER_OPEN_SELECTOR, hasFiles,
+} from '../hooks/useFileHoverOpen';
+import useLang from '../hooks/useLang';
 import usePrevious from '../hooks/usePrevious';
 import { useSignalEffect } from '../hooks/useSignalEffect';
 import { getIsInBackground } from '../hooks/window/useBackgroundMode';
@@ -43,6 +53,7 @@ type StateProps = {
   hasWebAuthTokenFailed?: boolean;
   isTestServer?: boolean;
   theme: ThemeKey;
+  customBackgroundColor?: string;
   actionMessageBg?: string;
 };
 
@@ -55,7 +66,6 @@ enum AppScreens {
 
 const TRANSITION_RENDER_COUNT = Object.keys(AppScreens).length / 2;
 const ACTIVE_PAGE_TITLE = IS_TAURI ? PAGE_TITLE_TAURI : PAGE_TITLE;
-const INACTIVE_PAGE_TITLE = `${ACTIVE_PAGE_TITLE} ${INACTIVE_MARKER}`;
 
 const App = ({
   authState,
@@ -65,8 +75,11 @@ const App = ({
   hasWebAuthTokenFailed,
   isTestServer,
   theme,
+  customBackgroundColor,
   actionMessageBg,
 }: StateProps) => {
+  const lang = useLang();
+
   const { isMobile } = useAppLayout();
   const isMobileOs = PLATFORM_ENV === 'iOS' || PLATFORM_ENV === 'Android';
 
@@ -79,29 +92,21 @@ const App = ({
   useEffect(() => {
     const hash = getInitialLocationHash();
     // If there is no stored session on first slot, navigate to any other slot with stored session
-    if (!hasStoredSession() && !ACCOUNT_SLOT && !hash) {
-      const accounts = getAccountsInfo();
-      Object.keys(accounts)
-        .map(Number)
-        .sort((a, b) => b - a)
-        .forEach((key) => {
-          const slot = Number(key);
-          const account = accounts[slot];
-          if (account) {
-            const url = getAccountSlotUrl(slot);
-            window.location.href = `${url}#${hash || 'login'}`;
-          }
-        });
+    if (!getPendingWebLogin() && !hasStoredSession() && !ACCOUNT_SLOT && !hash) {
+      const firstLoggedInAccountSlot = getFirstLoggedInAccountSlot();
+      if (firstLoggedInAccountSlot) {
+        const url = getAccountSlotUrl(firstLoggedInAccountSlot);
+        window.location.href = `${url}#${hash || 'login'}`;
+      }
     }
 
-    // TODO[Passcode]: Remove when multiacc passcode is implemented
-    const checkMultiaccPasscode = async () => {
-      if (checkSessionLocked() && ACCOUNT_SLOT && await hasEncryptedSession()) {
-        const url = getAccountSlotUrl(1);
-        window.location.href = url;
-      }
-    };
-    checkMultiaccPasscode();
+    if (checkSessionLocked() && ACCOUNT_SLOT) {
+      void hasLegacyEncryptedSession().then(async (hasLegacySession) => {
+        if (hasLegacySession && !await handoffWebLogin(getAccountSlotUrl(1))) {
+          window.location.replace(getAccountSlotUrl(1));
+        }
+      }).catch(() => undefined);
+    }
   }, []);
 
   // Prevent drop on elements that do not accept it
@@ -110,8 +115,11 @@ const App = ({
     const handleDrag = (e: DragEvent) => {
       e.preventDefault();
       if (!e.dataTransfer) return;
-      if (!(e.target as HTMLElement).dataset.dropzone) {
-        e.dataTransfer.dropEffect = 'none';
+      if (!(e.target instanceof Element && e.target.closest('[data-dropzone]'))) {
+        const isFileHoverOpen = hasFiles(e.dataTransfer)
+          && e.target instanceof Element
+          && Boolean(e.target.closest(FILE_HOVER_OPEN_SELECTOR));
+        e.dataTransfer.dropEffect = isFileHoverOpen ? 'link' : 'none';
       } else {
         e.dataTransfer.dropEffect = 'copy';
       }
@@ -182,7 +190,7 @@ const App = ({
   if (activeKey !== AppScreens.lock
     && activeKey !== AppScreens.inactive
     && activeKey !== AppScreens.main
-    && parseInitialLocationHash()?.tgWebAuthToken
+    && getPendingWebLogin()
     && !hasWebAuthTokenFailed) {
     page = 'main';
     activeKey = AppScreens.main;
@@ -194,11 +202,11 @@ const App = ({
 
   useEffect(() => {
     if (inactiveReason) {
-      document.title = INACTIVE_PAGE_TITLE;
+      document.title = `${ACTIVE_PAGE_TITLE} ${lang('PageTitleInactive')}`;
     } else {
       document.title = ACTIVE_PAGE_TITLE;
     }
-  }, [inactiveReason]);
+  }, [inactiveReason, lang]);
 
   const prevActiveKey = usePrevious(activeKey);
 
@@ -216,23 +224,30 @@ const App = ({
   }
 
   useTauriDrag();
+  useFileHoverOpen();
 
   useLayoutEffect(() => {
     document.body.classList.add(styles.bg);
+    document.documentElement.classList.remove('initial');
   }, []);
 
   useLayoutEffect(() => {
+    // Prefer the chosen wallpaper's base color, so the pre-render base matches the
+    // actual wallpaper instead of flashing the built-in default first.
     document.body.style.setProperty(
       '--theme-background-color',
-      theme === 'dark' ? DARK_THEME_BG_COLOR : LIGHT_THEME_BG_COLOR,
+      customBackgroundColor || (theme === 'dark' ? DARK_THEME_BG_COLOR : LIGHT_THEME_BG_COLOR),
     );
-  }, [theme]);
+  }, [theme, customBackgroundColor]);
 
   useLayoutEffect(() => {
-    if (actionMessageBg) {
-      document.body.style.setProperty('--action-message-bg', actionMessageBg);
-    }
-  }, [actionMessageBg]);
+    // Fall back to the theme default when the tint is unset (e.g. a photo wallpaper without a
+    // thumbnail), so service chips don't keep the previous wallpaper's tint.
+    document.body.style.setProperty(
+      '--action-message-bg',
+      actionMessageBg || getActionMessageBg(theme)!,
+    );
+  }, [actionMessageBg, theme]);
 
   const getIsInBackgroundLocal = getIsInBackground;
   useSignalEffect(() => {
@@ -256,7 +271,7 @@ const App = ({
       >
         {renderContent}
       </Transition>
-      {activeKey === AppScreens.auth && isTestServer && <div className="test-server-badge">Test server</div>}
+      {activeKey === AppScreens.auth && isTestServer && <div className="test-server-badge">{lang('TestServer')}</div>}
       <Notifications />
     </UiLoader>
   );
@@ -265,13 +280,17 @@ const App = ({
 export default withGlobal(
   (global): Complete<StateProps> => {
     const { state: authState, hasWebAuthTokenFailed, hasWebAuthTokenPasswordRequired } = global.auth;
+    const theme = selectTheme(global);
+    const themeValues = selectThemeValues(global, theme);
+
     return {
       authState,
       isScreenLocked: global.passcode?.isScreenLocked,
       hasPasscode: global.passcode?.hasPasscode,
       inactiveReason: selectTabState(global).inactiveReason,
       hasWebAuthTokenFailed: hasWebAuthTokenFailed || hasWebAuthTokenPasswordRequired,
-      theme: selectTheme(global),
+      theme,
+      customBackgroundColor: getWallpaperBaseColor(theme, themeValues || {}),
       isTestServer: global.config?.isTestServer,
       actionMessageBg: selectActionMessageBg(global),
     };

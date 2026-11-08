@@ -1,13 +1,12 @@
-import Color from 'colorjs.io';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useSignal } from '../../../lib/teact/teact';
 
 import type { ApiSticker } from '../../../api/types';
 
+import { buildColor, convertColor, serializeColor } from '../../../lib/color';
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import { getStickerMediaHash } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
 import buildStyle from '../../../util/buildStyle';
-import { getColorLuma } from '../../../util/colors.ts';
 import { preloadImage } from '../../../util/files';
 import { REM } from '../helpers/mediaDimensions';
 
@@ -42,8 +41,10 @@ const RING_INCREMENT = 0.5;
 const DEFAULT_CENTER_EMPTINESS = 0.1;
 const DEFAULT_MAX_RADIUS = 0.42;
 const MIN_SIZE = 4 * REM;
-const DARK_LUMA_THRESHOLD = 255 * 0.2;
+const RGB_CHANNEL_MAX = 255;
+const DARK_LUMA_THRESHOLD = RGB_CHANNEL_MAX * 0.2;
 const COLOR_PERCENT_MAX = 100;
+const LUMA_COEFFICIENTS = [0.2126, 0.7152, 0.0722] as const;
 
 const DEFAULT_PATTERN_SIZE = 20;
 const DEFAULT_RINGS_COUNT = 3;
@@ -156,7 +157,7 @@ const RadialPatternBackground = ({
       ctx.fillStyle = patternColor;
     } else {
       const baseColor = backgroundColors?.[1] ?? backgroundColors?.[0] ?? '#000000';
-      const isDark = getColorLuma(new Color(baseColor)) < DARK_LUMA_THRESHOLD;
+      const isDark = getPerceivedLuma(baseColor) < DARK_LUMA_THRESHOLD;
       ctx.fillStyle = buildAdjustedHsvColor(baseColor, 0.5, isDark ? 0.28 : -0.28);
     }
     ctx.globalCompositeOperation = 'source-in';
@@ -223,15 +224,24 @@ const RadialPatternBackground = ({
 
 export default memo(RadialPatternBackground);
 
+function getPerceivedLuma(color: string) {
+  const [r, g, b] = convertColor(buildColor(color), 'srgb').coords;
+  const [rc, gc, bc] = LUMA_COEFFICIENTS;
+  return rc * (r! * RGB_CHANNEL_MAX) + gc * (g! * RGB_CHANNEL_MAX) + bc * (b! * RGB_CHANNEL_MAX);
+}
+
 function buildAdjustedHsvColor(color: string, satDelta: number, valDelta: number) {
-  const parsedColor = new Color(color);
-  const [h, initialS, initialV] = parsedColor.to('hsv').coords;
+  const parsedColor = buildColor(color);
+  const [h, initialS, initialV] = convertColor(parsedColor, 'hsv').coords;
   let s = initialS! / COLOR_PERCENT_MAX;
   let v = initialV! / COLOR_PERCENT_MAX;
 
   if (s > 0.1 && s < 0.9) s = Math.max(0, Math.min(1, s + satDelta));
   v = Math.max(0, Math.min(1, v + valDelta));
 
-  return new Color('hsv', [h || 0, s * COLOR_PERCENT_MAX, v * COLOR_PERCENT_MAX], parsedColor.alpha)
-    .toString({ format: 'hex', collapse: false, alpha: true });
+  return serializeColor({
+    space: 'hsv',
+    coords: [h || 0, s * COLOR_PERCENT_MAX, v * COLOR_PERCENT_MAX],
+    alpha: parsedColor.alpha,
+  }, { format: 'hex', collapse: false, alpha: true });
 }

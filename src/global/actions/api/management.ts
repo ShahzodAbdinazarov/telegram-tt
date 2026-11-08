@@ -2,7 +2,7 @@ import type { ActionReturnType } from '../../types';
 import { ManagementProgress } from '../../../types';
 
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
-import * as langProvider from '../../../util/oldLangProvider';
+import { getTranslationFn } from '../../../util/localization';
 import { callApi } from '../../../api/gramjs';
 import { getUserFirstOrLastName } from '../../helpers';
 import { addActionHandler, getGlobal, setGlobal } from '../../index';
@@ -16,10 +16,10 @@ import {
 import { ensureIsSuperGroup } from './chats';
 
 addActionHandler('checkPublicLink', async (global, actions, payload): Promise<void> => {
-  const { username, tabId = getCurrentTabId() } = payload;
+  const { chatId, username, tabId = getCurrentTabId() } = payload;
 
-  const { chatId } = selectCurrentMessageList(global, tabId) || {};
-  if (!chatId) {
+  const chat = selectChat(global, chatId);
+  if (!chat) {
     return;
   }
 
@@ -33,9 +33,18 @@ addActionHandler('checkPublicLink', async (global, actions, payload): Promise<vo
   );
   setGlobal(global);
 
-  const { result, error } = (await callApi('checkChatUsername', { username }));
+  const response = await callApi('checkChatUsername', { chat, username });
 
   global = getGlobal();
+  if (!response) {
+    // Settle the checking state, so the username is checked again once edited
+    global = updateManagementProgress(global, ManagementProgress.Error, tabId);
+    global = updateManagement(global, chatId, { checkedUsername: username }, tabId);
+    setGlobal(global);
+    return;
+  }
+
+  const { result, error } = response;
   global = updateManagementProgress(
     global, result === true ? ManagementProgress.Complete : ManagementProgress.Error, tabId,
   );
@@ -457,7 +466,13 @@ addActionHandler('uploadContactProfilePhoto', async (global, actions, payload): 
 
   if (file && !isSuggest) {
     actions.showNotification({
-      message: langProvider.oldTranslate('UserInfo.SetCustomPhoto.SuccessPhotoText', getUserFirstOrLastName(user)),
+      message: {
+        key: 'UserInfoSetCustomPhotoSuccessPhotoText',
+        variables: {
+          user: getUserFirstOrLastName(getTranslationFn(), user),
+        },
+        options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+      },
       tabId,
     });
   }

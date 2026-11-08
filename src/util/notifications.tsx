@@ -4,6 +4,7 @@ import type {
   ApiChat, ApiMessage, ApiPeer, ApiPeerReaction,
   ApiPhoneCall, ApiUser,
 } from '../api/types';
+import type { GlobalState } from '../global/types';
 import { ApiMediaFormat } from '../api/types';
 
 import { APP_NAME, DEBUG, IS_TEST } from '../config';
@@ -18,6 +19,7 @@ import {
   getIsChatSilent,
   getShouldIgnoreNotificationMute,
   getShouldShowMessagePreview,
+  mergeNotifySettings,
 } from '../global/helpers/notifications';
 import { getMessageSenderName } from '../global/helpers/peers';
 import {
@@ -38,7 +40,6 @@ import jsxToHtml from './element/jsxToHtml';
 import { buildCollectionByKey } from './iteratees';
 import { getTranslationFn } from './localization';
 import * as mediaLoader from './mediaLoader';
-import { oldTranslate } from './oldLangProvider';
 import { debounce } from './schedulers';
 import { getServerTime } from './serverTime';
 
@@ -200,6 +201,14 @@ export async function unsubscribe() {
   await unsubscribeFromPush(subscription);
 }
 
+export async function unsubscribeLocally() {
+  if (!checkIfPushSupported()) return;
+  const serviceWorkerRegistration = await navigator.serviceWorker.getRegistration();
+  if (!serviceWorkerRegistration) return;
+  const subscription = await serviceWorkerRegistration.pushManager.getSubscription();
+  await subscription?.unsubscribe();
+}
+
 // Load custom emoji from the api if it's not cached already
 async function loadCustomEmoji(id: string) {
   let global = getGlobal();
@@ -292,7 +301,9 @@ export async function subscribe() {
 
 function checkIfShouldNotify(chat: ApiChat, message: Partial<ApiMessage>) {
   const global = getGlobal();
-  const isChatMuted = getIsChatMuted(chat, selectNotifyDefaults(global), selectNotifyException(global, chat.id));
+  const notifyDefaults = selectNotifyDefaults(global);
+  const notifyException = getChatNotifyException(global, chat);
+  const isChatMuted = getIsChatMuted(chat, notifyDefaults, notifyException);
   const topic = selectTopicFromMessage(global, message as ApiMessage);
   const topicMutedUntil = topic?.notifySettings.mutedUntil;
   const isMuted = topicMutedUntil === undefined ? isChatMuted : topicMutedUntil > getServerTime();
@@ -319,6 +330,7 @@ function checkIfShouldNotify(chat: ApiChat, message: Partial<ApiMessage>) {
 }
 
 function getNotificationContent(chat: ApiChat, message: ApiMessage, reaction?: ApiPeerReaction) {
+  const lang = getTranslationFn();
   const global = getGlobal();
   let sender = selectSender(global, message);
   const hasReaction = Boolean(reaction);
@@ -332,22 +344,29 @@ function getNotificationContent(chat: ApiChat, message: ApiMessage, reaction?: A
   let body: string;
   if (
     !isScreenLocked
-    && getShouldShowMessagePreview(chat, selectNotifyDefaults(global), selectNotifyException(global, chat.id))
+    && getShouldShowMessagePreview(chat, selectNotifyDefaults(global), getChatNotifyException(global, chat))
   ) {
-    const senderName = sender ? getMessageSenderName(getTranslationFn(), chat.id, sender) : undefined;
+    const senderName = sender ? getMessageSenderName(lang, chat.id, sender) : undefined;
     let summary = jsxToHtml(<span><MessageSummary message={message} /></span>)[0].textContent || '';
+
+    // The chat list preview stays without the comment, as in the Android app
+    const { action } = message.content;
+
+    if (action?.type === 'gramTransfer' && action.comment) {
+      summary = `${summary}: ${action.comment}`;
+    }
 
     if (hasReaction) {
       const emoji = getReactionEmoji(reaction);
-      summary = oldTranslate('PushReactText', [emoji, summary]);
+      summary = lang('PushReactText', { emoji, summary });
     }
 
     body = senderName ? `${senderName}: ${summary}` : summary;
   } else {
-    body = getTranslationFn()('NotificationMessageTextHidden');
+    body = lang('NotificationMessageTextHidden');
   }
 
-  let title = isScreenLocked ? APP_NAME : getChatTitle(oldTranslate, chat, isSelf);
+  let title = isScreenLocked ? APP_NAME : getChatTitle(lang, chat, isSelf);
 
   if (message.isSilent) {
     title += ' 🔕';
@@ -392,7 +411,7 @@ export async function notifyAboutCall({
   const icon = await getAvatar(user);
 
   const options: NotificationOptions = {
-    body: getUserFullName(user),
+    body: getUserFullName(getTranslationFn(), user),
     icon,
     badge: icon,
     tag: `call_${call.id}`,
@@ -403,7 +422,7 @@ export async function notifyAboutCall({
     options.vibrate = [200, 100, 200];
   }
 
-  const notification = new Notification(oldTranslate('VoipIncoming'), options);
+  const notification = new Notification(getTranslationFn()('VoipIncoming'), options);
 
   notification.onclick = () => {
     notification.close();
@@ -422,7 +441,7 @@ export async function notifyAboutMessage({
   const { hasWebNotifications } = selectSettingsKeys(global);
   if (!checkIfShouldNotify(chat, message)) return;
   const isChatSilent = getIsChatSilent(
-    chat, selectNotifyDefaults(getGlobal()), selectNotifyException(getGlobal(), chat.id),
+    chat, selectNotifyDefaults(global), getChatNotifyException(global, chat),
   );
   const topic = selectTopicFromMessage(global, message as ApiMessage);
   const isSilent = topic?.notifySettings.hasSound === undefined ? isChatSilent : !topic.notifySettings.hasSound;
@@ -516,6 +535,15 @@ export function closeMessageNotifications(payload: { chatId: string; lastReadInb
     type: 'closeMessageNotifications',
     payload,
   });
+}
+
+function getChatNotifyException(global: GlobalState, chat: ApiChat) {
+  const chatNotifyException = selectNotifyException(global, chat.id);
+  const communityNotifyException = chat.linkedCommunityId
+    ? selectNotifyException(global, chat.linkedCommunityId)
+    : undefined;
+
+  return mergeNotifySettings(communityNotifyException, chatNotifyException);
 }
 
 // Notify service worker that client is fully loaded

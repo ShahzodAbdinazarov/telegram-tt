@@ -12,11 +12,11 @@ import { STARS_CURRENCY_CODE, TON_CURRENCY_CODE } from '../../../../config';
 import { getHasAdminRight } from '../../../../global/helpers';
 import { getPeerTitle, isApiPeerChat, isApiPeerUser } from '../../../../global/helpers/peers';
 import { getMainUsername } from '../../../../global/helpers/users';
-import { selectPeer, selectUser } from '../../../../global/selectors';
+import { selectPeer, selectPeerPaidMessagesStars, selectUser } from '../../../../global/selectors';
 import buildClassName from '../../../../util/buildClassName';
 import { copyTextToClipboard } from '../../../../util/clipboard';
-import { formatDateTimeToString } from '../../../../util/dates/oldDateFormat';
-import { formatCurrency, formatCurrencyAsString } from '../../../../util/formatCurrency';
+import { formatCurrencyAsString } from '../../../../util/formatCurrency';
+import { formatDateTime, secondsToDate } from '../../../../util/localization/dateFormat';
 import {
   formatStarsAsIcon, formatStarsAsText, formatTonAsIcon, formatTonAsText,
   NEXT_ARROW_REPLACEMENT,
@@ -31,7 +31,6 @@ import useCurrentOrPrev from '../../../../hooks/useCurrentOrPrev';
 import useFlag from '../../../../hooks/useFlag';
 import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
-import useOldLang from '../../../../hooks/useOldLang';
 
 import AnimatedIconFromSticker from '../../../common/AnimatedIconFromSticker';
 import Avatar from '../../../common/Avatar';
@@ -45,6 +44,7 @@ import Button from '../../../ui/Button';
 import Checkbox from '../../../ui/Checkbox';
 import ConfirmDialog from '../../../ui/ConfirmDialog';
 import Link from '../../../ui/Link';
+import TextArea from '../../../ui/TextArea';
 import TableInfoModal, { type TableData } from '../../common/TableInfoModal';
 import UniqueGiftHeader from '../UniqueGiftHeader';
 
@@ -61,11 +61,14 @@ type StateProps = {
   currentUserId?: string;
   starGiftMaxConvertPeriod?: number;
   hasAdminRights?: boolean;
+  isChatOwner?: boolean;
   currentUserEmojiStatus?: ApiEmojiStatusType;
   collectibleEmojiStatuses?: ApiEmojiStatusType[];
   tonExplorerUrl?: string;
   currentUser?: ApiUser;
   recipientPeer?: ApiPeer;
+  giftMessageLimit?: number;
+  paidMessagesStars?: number;
 };
 
 const STICKER_SIZE = 120;
@@ -78,16 +81,20 @@ const GiftInfoModal = ({
   currentUserId,
   starGiftMaxConvertPeriod,
   hasAdminRights,
+  isChatOwner,
   currentUserEmojiStatus,
   collectibleEmojiStatuses,
   tonExplorerUrl,
   currentUser,
   recipientPeer,
+  giftMessageLimit,
+  paidMessagesStars,
 }: OwnProps & StateProps) => {
   const {
     closeGiftInfoModal,
     changeGiftVisibility,
     convertGiftToStars,
+    deleteSavedGift,
     openChatWithInfo,
     focusMessage,
     openGiftUpgradeModal,
@@ -101,11 +108,14 @@ const GiftInfoModal = ({
   } = getActions();
 
   const [isConvertConfirmOpen, openConvertConfirm, closeConvertConfirm] = useFlag();
+  const [isDeleteConfirmOpen, openDeleteConfirm, closeDeleteConfirm] = useFlag();
 
   const lang = useLang();
-  const oldLang = useOldLang();
+
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState<boolean>(false);
   const [shouldPayInTon, setShouldPayInTon] = useState<boolean>(false);
+  const [giftMessage, setGiftMessage] = useState('');
+  const [shouldHideName, setShouldHideName] = useState(true);
 
   const uniqueGiftHeaderRef = useRef<HTMLDivElement>();
 
@@ -149,6 +159,9 @@ const GiftInfoModal = ({
         ? renderingTargetPeer?.id === currentUserId
         : gift?.ownerId === currentUserId || isSelfUnique
   );
+
+  const canDelete = Boolean(canManage && !renderingModal?.isFromMessage && (!isTargetChat || isChatOwner)
+    && gift?.type === 'starGift' && !gift.isLimited && !gift.isAuction && !savedGift.isRefunded);
 
   function getResalePrice(isInTon?: boolean) {
     if (!isGiftUnique) return undefined;
@@ -203,6 +216,12 @@ const GiftInfoModal = ({
     handleClose();
   });
 
+  const handleDelete = useLastCallback(() => {
+    deleteSavedGift({ gift: savedGift! });
+    closeDeleteConfirm();
+    handleClose();
+  });
+
   const handleRemoveMessage = useLastCallback(() => {
     if (!savedGift?.inputGift || !savedGift.dropOriginalDetailsStars || !gift || !giftAttributes) return;
 
@@ -224,6 +243,8 @@ const GiftInfoModal = ({
 
   const handleBuyGift = useLastCallback(() => {
     if (gift?.type !== 'starGiftUnique' || !getResalePrice()) return;
+    setGiftMessage('');
+    setShouldHideName(true);
     setIsConfirmModalOpen(true);
   });
 
@@ -237,7 +258,13 @@ const GiftInfoModal = ({
     if (!peer || !price || gift?.type !== 'starGiftUnique') return;
     closeConfirmModal();
     closeGiftModal();
-    buyStarGift({ peerId: peer.id, slug: gift.slug, price });
+    buyStarGift({
+      peerId: peer.id,
+      slug: gift.slug,
+      price,
+      message: recipientPeer && !paidMessagesStars && giftMessage ? { text: giftMessage } : undefined,
+      shouldShowName: recipientPeer && !shouldHideName ? true : undefined,
+    });
   });
 
   const handleOpenValueModal = useLastCallback(() => {
@@ -308,7 +335,9 @@ const GiftInfoModal = ({
         <Button className={styles.buyButton} onClick={handleBuyGift}>
           <span>
             {lang('ButtonBuyGift', {
-              stars: formatCurrency(lang, resellPrice.amount, resellPrice.currency, { asFontIcon: true }),
+              stars: resellPrice.currency === TON_CURRENCY_CODE
+                ? formatTonAsIcon(lang, resellPrice.amount, { isMono: true })
+                : formatStarsAsIcon(lang, resellPrice.amount, { asFont: true }),
             }, { withNodes: true })}
           </span>
           {resellPrice?.currency === TON_CURRENCY_CODE && Boolean(resellPriceInStars) && (
@@ -384,11 +413,19 @@ const GiftInfoModal = ({
     let text = '';
     if (gift.type === 'starGift') {
       if (gift.firstSaleDate) {
-        text += `${lang('GiftInfoFirstSale')} ${formatDateTimeToString(gift.firstSaleDate * 1000, lang.code, true)}`;
+        text += `${lang('GiftInfoFirstSale')} ${formatDateTime(
+          lang,
+          secondsToDate(gift.firstSaleDate),
+          { date: 'short', time: 'short' },
+        )}`;
       }
       if (gift.lastSaleDate) {
         text += '\n';
-        text += `${lang('GiftInfoLastSale')} ${formatDateTimeToString(gift.lastSaleDate * 1000, lang.code, true)}`;
+        text += `${lang('GiftInfoLastSale')} ${formatDateTime(
+          lang,
+          secondsToDate(gift.lastSaleDate),
+          { date: 'short', time: 'short' },
+        )}`;
       }
     }
 
@@ -518,10 +555,9 @@ const GiftInfoModal = ({
       <div className={styles.headerRightButtons}>
         {Boolean(resellPrice?.amount) && (
           <div className={styles.giftResalePriceContainer}>
-            {formatCurrency(lang, resellPrice.amount, resellPrice.currency, {
-              asFontIcon: true,
-              iconClassName: styles.giftResalePriceStar,
-            })}
+            {resellPrice.currency === TON_CURRENCY_CODE
+              ? formatTonAsIcon(lang, resellPrice.amount, { isMono: true, className: styles.giftResalePriceStar })
+              : formatStarsAsIcon(lang, resellPrice.amount, { asFont: true, className: styles.giftResalePriceStar })}
           </div>
         )}
         {canCraft && (
@@ -573,39 +609,45 @@ const GiftInfoModal = ({
     );
 
     const tableData: TableData = [];
+    const hasFrom = fromId || isNameHidden;
+
+    if (hasFrom) {
+      tableData.push([
+        lang('GiftInfoFrom'),
+        !fromId ? (
+          <>
+            <Avatar size="small" peer={CUSTOM_PEER_HIDDEN} />
+            <span className={styles.unknown}>{lang(CUSTOM_PEER_HIDDEN.titleKey!)}</span>
+          </>
+        ) : { chatId: fromId },
+      ]);
+    }
+
     if (gift.type === 'starGift') {
-      const hasFrom = fromId || isNameHidden;
-
-      if (hasFrom) {
-        tableData.push([
-          lang('GiftInfoFrom'),
-          !fromId ? (
-            <>
-              <Avatar size="small" peer={CUSTOM_PEER_HIDDEN} />
-              <span className={styles.unknown}>{oldLang(CUSTOM_PEER_HIDDEN.titleKey!)}</span>
-            </>
-          ) : { chatId: fromId },
-        ]);
-      }
-
       if (savedGift?.date) {
         tableData.push([
           lang('GiftInfoDate'),
-          <span title={saleDateInfo}>{formatDateTimeToString(savedGift.date * 1000, lang.code, true)}</span>,
+          <span title={saleDateInfo}>
+            {formatDateTime(
+              lang,
+              secondsToDate(savedGift.date),
+              { date: 'short', time: 'short' },
+            )}
+          </span>,
         ]);
       }
 
       if (gift.firstSaleDate && !savedGift) {
         tableData.push([
           lang('GiftInfoFirstSale'),
-          formatDateTimeToString(gift.firstSaleDate * 1000, lang.code, true),
+          formatDateTime(lang, secondsToDate(gift.firstSaleDate), { date: 'short', time: 'short' }),
         ]);
       }
 
       if (gift.lastSaleDate && !savedGift) {
         tableData.push([
           lang('GiftInfoLastSale'),
-          formatDateTimeToString(gift.lastSaleDate * 1000, lang.code, true),
+          formatDateTime(lang, secondsToDate(gift.lastSaleDate), { date: 'short', time: 'short' }),
         ]);
       }
 
@@ -643,13 +685,13 @@ const GiftInfoModal = ({
           </div>,
         ]);
       }
+    }
 
-      if (savedGift?.message) {
-        tableData.push([
-          undefined,
-          renderTextWithEntities(savedGift.message),
-        ]);
-      }
+    if (savedGift?.message) {
+      tableData.push([
+        undefined,
+        renderTextWithEntities(savedGift.message),
+      ]);
     }
 
     if (isGiftUnique) {
@@ -762,7 +804,7 @@ const GiftInfoModal = ({
                 className={styles.removeMessageButton}
                 size="smaller"
                 color="translucent"
-                ariaLabel="Delete original details"
+                ariaLabel={lang('AriaDeleteGiftDetails')}
                 onClick={handleRemoveMessage}
                 iconName="delete"
               />
@@ -833,7 +875,7 @@ const GiftInfoModal = ({
     };
   }, [
     typeGift, savedGift, renderingTargetPeer, giftSticker, lang,
-    canManage, hasConvertOption, isSender, oldLang, tonExplorerUrl,
+    canManage, hasConvertOption, isSender, tonExplorerUrl,
     gift, giftAttributes, renderFooterButton, isTargetChat,
     isGiftUnique, saleDateInfo, canCraft, handleOpenCraftModal,
     canBuyGift, giftOwnerTitle, resellPrice, uniqueGiftTitle, uniqueGiftSubtitle, releasedByPeer,
@@ -846,6 +888,7 @@ const GiftInfoModal = ({
       canManage={canManage}
       collectibleEmojiStatuses={collectibleEmojiStatuses}
       currentUserEmojiStatus={currentUserEmojiStatus}
+      onDelete={canDelete ? openDeleteConfirm : undefined}
     />
   );
 
@@ -875,7 +918,7 @@ const GiftInfoModal = ({
           onClose={closeConfirmModal}
           confirmLabel={lang('ButtonBuyGift', {
             stars: confirmPrice?.currency === TON_CURRENCY_CODE
-              ? formatTonAsIcon(lang, confirmPrice.amount, { shouldConvertFromNanos: true })
+              ? formatTonAsIcon(lang, confirmPrice.amount)
               : formatStarsAsIcon(lang, confirmPrice.amount, { asFont: true }),
           }, { withNodes: true })}
           confirmHandler={handleConfirmBuyGift}
@@ -900,7 +943,7 @@ const GiftInfoModal = ({
                 {lang('GiftBuyConfirmDescription', {
                   gift: lang('GiftUnique', { title: uniqueGift.title, number: uniqueGift.number }),
                   stars: confirmPrice?.currency === TON_CURRENCY_CODE
-                    ? formatTonAsText(lang, confirmPrice.amount, true)
+                    ? formatTonAsText(lang, confirmPrice.amount)
                     : formatStarsAsText(lang, confirmPrice.amount),
                 }, {
                   withNodes: true,
@@ -914,7 +957,7 @@ const GiftInfoModal = ({
                 {lang('GiftBuyForPeerConfirmDescription', {
                   gift: lang('GiftUnique', { title: uniqueGift.title, number: uniqueGift.number }),
                   stars: confirmPrice?.currency === TON_CURRENCY_CODE
-                    ? formatTonAsText(lang, confirmPrice.amount, true)
+                    ? formatTonAsText(lang, confirmPrice.amount)
                     : formatStarsAsText(lang, confirmPrice.amount),
                   peer: getPeerTitle(lang, recipientPeer),
                 }, {
@@ -923,6 +966,30 @@ const GiftInfoModal = ({
                 })}
               </p>
             )}
+          {recipientPeer && (
+            <div className={styles.resaleOptions}>
+              {!paidMessagesStars && (
+                <TextArea
+                  className={styles.resaleMessage}
+                  label={lang('GiftMessagePlaceholder')}
+                  value={giftMessage}
+                  maxLength={giftMessageLimit}
+                  onChange={(e) => setGiftMessage(e.target.value)}
+                />
+              )}
+              <Checkbox
+                className={styles.checkBox}
+                label={lang('GiftHideMyName')}
+                checked={shouldHideName}
+                onCheck={setShouldHideName}
+              />
+              <div className={styles.checkBoxDescription}>
+                {isApiPeerUser(recipientPeer)
+                  ? lang('GiftHideNameDescription', { receiver: getPeerTitle(lang, recipientPeer)! })
+                  : lang('GiftHideNameDescriptionChannel')}
+              </div>
+            </div>
+          )}
           {!uniqueGift.resaleTonOnly && (
             <>
               <Checkbox
@@ -969,6 +1036,19 @@ const GiftInfoModal = ({
           <div>{lang('GiftInfoConvertDescription2')}</div>
         </ConfirmDialog>
       )}
+      {canDelete && (
+        <ConfirmDialog
+          isOpen={isDeleteConfirmOpen}
+          onClose={closeDeleteConfirm}
+          confirmHandler={handleDelete}
+          confirmLabel={lang('Delete')}
+          confirmIsDestructive
+          title={lang('GiftInfoDelete')}
+        >
+          <p>{lang('GiftInfoDeleteDescription')}</p>
+          <p>{lang('GiftInfoDeleteDescription2')}</p>
+        </ConfirmDialog>
+      )}
     </>
   );
 };
@@ -984,6 +1064,7 @@ export default memo(withGlobal<OwnProps>(
     const targetPeer = modal?.peerId ? selectPeer(global, modal.peerId) : undefined;
     const chat = targetPeer && isApiPeerChat(targetPeer) ? targetPeer : undefined;
     const hasAdminRights = chat && getHasAdminRight(chat, 'postMessages');
+    const isChatOwner = chat?.isOwner;
     const currentUser = selectUser(global, currentUserId!);
     const recipientPeer = modal?.recipientId && currentUserId !== modal.recipientId
       ? selectPeer(global, modal.recipientId) : undefined;
@@ -1002,10 +1083,13 @@ export default memo(withGlobal<OwnProps>(
       starGiftMaxConvertPeriod: global.appConfig.starGiftMaxConvertPeriod,
       tonExplorerUrl: global.appConfig.tonExplorerUrl,
       hasAdminRights,
+      isChatOwner,
       currentUserEmojiStatus,
       collectibleEmojiStatuses,
       currentUser,
       recipientPeer,
+      giftMessageLimit: global.appConfig.starGiftMaxMessageLength,
+      paidMessagesStars: recipientPeer ? selectPeerPaidMessagesStars(global, recipientPeer.id) : undefined,
     };
   },
 )(GiftInfoModal));

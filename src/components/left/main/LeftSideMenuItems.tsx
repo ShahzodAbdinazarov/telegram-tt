@@ -1,10 +1,10 @@
-import type React from '../../../lib/teact/teact';
 import { memo, useMemo } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiUser } from '../../../api/types';
 import type { GlobalState } from '../../../global/types';
 import type { AnimationLevel, ThemeKey } from '../../../types';
+import { SettingsScreens } from '../../../types';
 
 import {
   ANIMATION_LEVEL_MAX,
@@ -22,7 +22,9 @@ import {
   INITIAL_PERFORMANCE_STATE_MED,
   INITIAL_PERFORMANCE_STATE_MIN,
 } from '../../../global/initialState';
-import { selectTabState, selectTheme, selectUser } from '../../../global/selectors';
+import {
+  selectOldWalletBotId, selectTabState, selectTheme, selectUser,
+} from '../../../global/selectors';
 import { selectPremiumLimit } from '../../../global/selectors/limits';
 import { selectSharedSettings } from '../../../global/selectors/sharedState';
 import { IS_MULTIACCOUNT_SUPPORTED, IS_TAURI } from '../../../util/browser/globalEnvironment';
@@ -30,11 +32,13 @@ import { getPromptInstall } from '../../../util/installPrompt';
 import { switchPermanentWebVersion } from '../../../util/permanentWebVersion';
 import { getSystemTheme } from '../../../util/systemTheme';
 
+import useFlag from '../../../hooks/useFlag';
 import { useFolderManagerForUnreadCounters } from '../../../hooks/useFolderManager';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 
 import AttachBotItem from '../../middle/composer/AttachBotItem';
+import ConfirmDialog from '../../ui/ConfirmDialog';
 import MenuItem from '../../ui/MenuItem';
 import MenuSeparator from '../../ui/MenuSeparator';
 import NestedMenuItem from '../../ui/NestedMenuItem';
@@ -48,6 +52,7 @@ type OwnProps = {
   onSelectArchived: NoneToVoidFunction;
   onBotMenuOpened: NoneToVoidFunction;
   onBotMenuClosed: NoneToVoidFunction;
+  onSwitchAccount: (url: string) => void;
   footer?: string;
 };
 
@@ -58,6 +63,9 @@ type StateProps = {
   canInstall?: boolean;
   attachBots: GlobalState['attachMenu']['bots'];
   accountsTotalLimit: number;
+  hasPasscode?: boolean;
+  isWalletAvailable?: boolean;
+  oldWalletBotId?: string;
 } & Pick<GlobalState, 'currentUserId' | 'archiveSettings'>;
 
 const LeftSideMenuItems = ({
@@ -69,11 +77,15 @@ const LeftSideMenuItems = ({
   attachBots,
   currentUser,
   accountsTotalLimit,
+  hasPasscode,
+  isWalletAvailable,
+  oldWalletBotId,
   onSelectArchived,
   onSelectContacts,
   onSelectSettings,
   onBotMenuOpened,
   onBotMenuClosed,
+  onSwitchAccount,
   footer,
 }: OwnProps & StateProps) => {
   const {
@@ -83,8 +95,11 @@ const LeftSideMenuItems = ({
     openChatByUsername,
     openUrl,
     openChatWithInfo,
+    openSettingsScreen,
+    openWalletModal,
   } = getActions();
   const lang = useLang();
+  const [isSwitchToWebKDialogOpen, openSwitchToWebKDialog, closeSwitchToWebKDialog] = useFlag();
 
   const animationLevelValue = animationLevel !== ANIMATION_LEVEL_MIN
     ? (animationLevel === ANIMATION_LEVEL_MAX ? 'max' : 'mid') : 'min';
@@ -93,7 +108,13 @@ const LeftSideMenuItems = ({
 
   const archivedUnreadChatsCount = useFolderManagerForUnreadCounters()[ARCHIVED_FOLDER_ID]?.chatsCount || 0;
 
-  const bots = useMemo(() => Object.values(attachBots).filter((bot) => bot.isForSideMenu), [attachBots]);
+  const bots = useMemo(() => Object.values(attachBots).filter((bot) => (
+    bot.isForSideMenu && bot.id !== oldWalletBotId
+  )), [attachBots, oldWalletBotId]);
+
+  const handleOpenWallet = useLastCallback(() => {
+    openWalletModal();
+  });
 
   const handleSelectMyProfile = useLastCallback(() => {
     openChatWithInfo({ id: currentUserId, shouldReplaceHistory: true, isOwnProfile: true });
@@ -131,8 +152,19 @@ const LeftSideMenuItems = ({
     window.open(BETA_CHANGELOG_URL, '_blank', 'noopener,noreferrer');
   });
 
-  const handleSwitchToWebK = useLastCallback(() => {
+  const handleSwitchToWebK = useLastCallback((e: React.SyntheticEvent<HTMLElement>) => {
+    e.preventDefault();
+    if (hasPasscode) {
+      openSwitchToWebKDialog();
+      return;
+    }
+
     switchPermanentWebVersion('K');
+  });
+
+  const handleOpenPasscodeSettings = useLastCallback(() => {
+    closeSwitchToWebKDialog();
+    openSettingsScreen({ screen: SettingsScreens.PasscodeTurnOff });
   });
 
   const handleOpenTipsChat = useLastCallback(() => {
@@ -151,6 +183,7 @@ const LeftSideMenuItems = ({
             currentUser={currentUser}
             totalLimit={accountsTotalLimit}
             onSelectCurrent={onSelectSettings}
+            onSwitchAccount={onSwitchAccount}
           />
           <MenuSeparator />
         </>
@@ -184,6 +217,15 @@ const LeftSideMenuItems = ({
       >
         {lang('MenuContacts')}
       </MenuItem>
+      {isWalletAvailable && (
+        <MenuItem
+          icon="gram-outline"
+          onClick={handleOpenWallet}
+        >
+          {lang('WalletMenuItem')}
+          <span className="menu-item-badge">{lang('New')}</span>
+        </MenuItem>
+      )}
       {bots.map((bot) => (
         <AttachBotItem
           bot={bot}
@@ -268,6 +310,14 @@ const LeftSideMenuItems = ({
       >
         {lang('MenuMore')}
       </NestedMenuItem>
+      <ConfirmDialog
+        isOpen={isSwitchToWebKDialogOpen}
+        title={lang('MenuSwitchToK')}
+        text={lang('PasscodeSwitchToKInfo')}
+        confirmLabel={lang('Continue')}
+        confirmHandler={handleOpenPasscodeSettings}
+        onClose={closeSwitchToWebKDialog}
+      />
     </>
   );
 };
@@ -290,6 +340,9 @@ export default memo(withGlobal<OwnProps>(
       archiveSettings,
       attachBots,
       accountsTotalLimit: selectPremiumLimit(global, 'moreAccounts'),
+      hasPasscode: global.passcode.hasPasscode,
+      isWalletAvailable: Boolean(global.appConfig.isWalletAvailable),
+      oldWalletBotId: selectOldWalletBotId(global),
     };
   },
 )(LeftSideMenuItems));

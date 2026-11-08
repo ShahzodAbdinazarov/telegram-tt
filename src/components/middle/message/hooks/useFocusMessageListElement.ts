@@ -11,7 +11,11 @@ import {
 import animateScroll from '../../../../util/animateScroll';
 import { REM } from '../../../common/helpers/mediaDimensions';
 import { requestAfterMessageListReflow } from '../../helpers/messageListReflow';
-import { getMessageListBottomReserve, getMessageListTopReserve } from '../../helpers/messageListReserves';
+import {
+  getEffectiveMessageListBottomReserve,
+  getMessageListTopReserve,
+  isSendCollapsePhaseActive,
+} from '../../helpers/messageListReserves';
 
 // This is used when the viewport was replaced.
 const BOTTOM_FOCUS_OFFSET = 500;
@@ -63,29 +67,29 @@ export default function useFocusMessageListElement({
             ? (isToBottom ? BOTTOM_FOCUS_OFFSET : RELOCATED_FOCUS_OFFSET) : undefined);
 
         const topReserve = getMessageListTopReserve(messagesContainer);
-        const bottomReserve = getMessageListBottomReserve(messagesContainer);
+        const bottomReserve = getEffectiveMessageListBottomReserve(messagesContainer);
         const marginReserve = scrollPosition === 'end' ? bottomReserve : topReserve;
+
+        // Scroll to the quote itself so it stays visible in messages taller than the viewport
+        const firstQuote = isQuote ? elementRef.current!.querySelector<HTMLSpanElement>('.is-quote') : undefined;
 
         const result = animateScroll({
           container: messagesContainer,
-          element: elementRef.current!,
+          element: firstQuote || elementRef.current!,
           position: scrollPosition,
           margin: (isToBottom ? BOTTOM_FOCUS_MARGIN : FOCUS_MARGIN) + marginReserve,
           topReserve,
           bottomReserve,
           maxDistance,
           forceDirection: focusDirection,
-          forceNormalContainerHeight: isResizingContainer,
+          forceNormalContainerHeight: isResizingContainer && !isSendCollapsePhaseActive(messagesContainer),
           shouldReturnMutationFn: true,
         });
 
-        if (isQuote) {
-          const firstQuote = elementRef.current!.querySelector<HTMLSpanElement>('.is-quote');
-          if (firstQuote) {
-            requestMutation(() => {
-              addExtraClass(firstQuote, 'animate');
-            });
-          }
+        if (firstQuote) {
+          requestMutation(() => {
+            addExtraClass(firstQuote, 'animate');
+          });
         }
 
         return result;

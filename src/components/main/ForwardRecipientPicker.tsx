@@ -1,9 +1,9 @@
-import type { FC } from '../../lib/teact/teact';
 import {
   memo, useCallback, useEffect, useMemo, useState,
 } from '../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../global';
 
+import type { TabState } from '../../global/types';
 import type { ForwardTarget, ThreadId } from '../../types';
 import type { ChatSelectionKey } from '../../util/keys/chatSelectionKey';
 
@@ -25,7 +25,6 @@ import useFlag from '../../hooks/useFlag';
 import useFrozenProps from '../../hooks/useFrozenProps';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 import usePreviousDeprecated from '../../hooks/usePreviousDeprecated';
 
 import AnimatedCounter from '../common/AnimatedCounter';
@@ -44,24 +43,26 @@ export type OwnProps = {
 
 interface StateProps {
   currentUserId?: string;
-  isManyMessages?: boolean;
   isStory?: boolean;
+  isAudioTrack?: boolean;
   isForwarding?: boolean;
   fromChatId?: string;
   forwardMessageIds?: number[];
   shouldPaidMessageAutoApprove?: boolean;
+  audioPendingSend?: TabState['forwardMessages']['audioPendingSend'];
 }
 
-const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
+const ForwardRecipientPicker = ({
   isOpen,
   currentUserId,
-  isManyMessages,
   isStory,
+  isAudioTrack,
   isForwarding,
   fromChatId,
   forwardMessageIds,
   shouldPaidMessageAutoApprove,
-}) => {
+  audioPendingSend,
+}: OwnProps & StateProps) => {
   const {
     openChatOrTopicWithReplyInDraft,
     setForwardChatOrTopic,
@@ -69,14 +70,15 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
     forwardToSavedMessages,
     forwardToMultipleChats,
     forwardStory,
+    forwardAudio,
     showNotification,
     copyMessageLink,
     openStarsBalanceModal,
     setPaidMessageAutoApprove,
+    clearAudioPendingSend,
   } = getActions();
 
   const lang = useLang();
-  const oldLang = useOldLang();
 
   const renderingIsStory = usePreviousDeprecated(isStory, true);
   const [isShown, markIsShown, unmarkIsShown] = useFlag();
@@ -84,8 +86,11 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
   const [caption, setCaption] = useState('');
   const [isPaymentConfirmOpen, openPaymentConfirm, closePaymentConfirm] = useFlag();
   const [shouldAutoApprove, setShouldAutoApprove] = useState(shouldPaidMessageAutoApprove);
+  const [pendingMusicTarget, setPendingMusicTarget] = useState<
+  { recipientId: string; threadId?: ThreadId; stars: number } | undefined
+  >();
 
-  const isMultiSelect = isForwarding && !isStory;
+  const isMultiSelect = isForwarding && !isStory && !isAudioTrack;
   const messageCount = forwardMessageIds?.length || 0;
 
   const paidChatsInfo = useMemo(() => {
@@ -129,43 +134,80 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
     if (!isOpen) {
       setSelectedIds([]);
       setCaption('');
+      setPendingMusicTarget(undefined);
     }
   }, [isOpen]);
 
+  const forwardToSelf = useLastCallback(() => {
+    forwardToSavedMessages({});
+    showNotification({
+      message: {
+        key: 'FwdMessagesToSaved',
+        options: {
+          withNodes: true,
+          withMarkdown: true,
+          pluralValue: messageCount,
+        },
+      },
+    });
+  });
+
+  const sendAudio = useLastCallback((recipientId: string, threadId?: ThreadId, confirmedStars?: number) => {
+    forwardAudio({ toChatId: recipientId, toThreadId: threadId, confirmedStars });
+  });
+
+  useEffect(() => {
+    if (!audioPendingSend) return;
+
+    setPendingMusicTarget({
+      recipientId: audioPendingSend.toChatId,
+      threadId: audioPendingSend.toThreadId,
+      stars: audioPendingSend.stars,
+    });
+    clearAudioPendingSend();
+    openPaymentConfirm();
+  }, [audioPendingSend]);
+
   const handleSelectRecipient = useCallback((recipientId: string, threadId?: ThreadId) => {
     const isSelf = recipientId === currentUserId;
+    if (isAudioTrack) {
+      sendAudio(recipientId, threadId);
+      return;
+    }
+
     if (isStory) {
       forwardStory({ toChatId: recipientId });
       const global = getGlobal();
       if (isUserId(recipientId)) {
         showNotification({
           message: isSelf
-            ? oldLang('Conversation.StoryForwardTooltip.SavedMessages.One')
-            : oldLang(
-              'StorySharedTo',
-              getUserFirstOrLastName(selectUser(global, recipientId)),
-            ),
+            ? {
+              key: 'ConversationStoryForwardTooltipSavedMessagesOne',
+              options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+            }
+            : {
+              key: 'StorySharedTo',
+              variables: { user: getUserFirstOrLastName(lang, selectUser(global, recipientId)) },
+              options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+            },
         });
       } else {
         const chat = selectChat(global, recipientId);
         if (!chat) return;
 
         showNotification({
-          message: oldLang('StorySharedTo', getChatTitle(oldLang, chat)),
+          message: {
+            key: 'StorySharedTo',
+            variables: { user: getChatTitle(lang, chat) },
+            options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+          },
         });
       }
       return;
     }
 
     if (isSelf) {
-      const message = oldLang(
-        isManyMessages
-          ? 'Conversation.ForwardTooltip.SavedMessages.Many'
-          : 'Conversation.ForwardTooltip.SavedMessages.One',
-      );
-
-      forwardToSavedMessages({});
-      showNotification({ message });
+      forwardToSelf();
     } else {
       const chatId = recipientId;
       const topicId = threadId ? Number(threadId) : undefined;
@@ -175,7 +217,7 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
         openChatOrTopicWithReplyInDraft({ chatId, topicId });
       }
     }
-  }, [currentUserId, isManyMessages, isStory, oldLang, isForwarding]);
+  }, [currentUserId, isStory, isAudioTrack, lang, isForwarding]);
 
   const handleClose = useCallback(() => {
     exitForwardMode();
@@ -199,6 +241,11 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
 
     if (selectedIds.length === 1) {
       const { peerId: chatId, topicId } = selectedIds[0];
+      if (chatId === currentUserId) {
+        forwardToSelf();
+        return;
+      }
+
       setForwardChatOrTopic({ chatId, topicId });
       return;
     }
@@ -257,13 +304,22 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
     forwardToMultipleChats({ targets, comment: caption || undefined });
 
     showNotification({
-      message: lang('FwdMessagesToChats', { count: selectedIds.length }, { pluralValue: selectedIds.length }),
+      message: {
+        key: 'FwdMessagesToChats',
+        variables: { count: selectedIds.length },
+        options: {
+          pluralValue: selectedIds.length,
+          withNodes: true,
+          withMarkdown: true,
+          renderTextFilters: ['br', 'links'],
+        },
+      },
     });
     exitForwardMode();
   });
 
   const handlePaymentConfirm = useLastCallback(() => {
-    const { totalStars } = paidChatsInfo;
+    const totalStars = pendingMusicTarget?.stars ?? paidChatsInfo.totalStars;
     const starsBalance = getGlobal().stars?.balance?.amount || 0;
 
     if (totalStars > starsBalance) {
@@ -279,7 +335,21 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
     if (shouldAutoApprove) {
       setPaidMessageAutoApprove();
     }
+
+    if (pendingMusicTarget) {
+      sendAudio(pendingMusicTarget.recipientId, pendingMusicTarget.threadId, pendingMusicTarget.stars);
+      setPendingMusicTarget(undefined);
+      return;
+    }
+
+    if (isAudioTrack || !selectedIds.length) return;
+
     executeForward();
+  });
+
+  const handlePaymentClose = useLastCallback(() => {
+    closePaymentConfirm();
+    setPendingMusicTarget(undefined);
   });
 
   const viewportFooter = useMemo(() => (
@@ -310,7 +380,7 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
           <Transition name="fade" activeKey={isInitial ? 0 : 1} slideClassName={styles.buttonSlide}>
             <span>
               {isInitial
-                ? (canCopyLink ? oldLang('CopyLink') : lang('SelectChats'))
+                ? (canCopyLink ? lang('CopyLink') : lang('SelectChats'))
                 : (singleChatStars > 0
                   ? lang(
                     'ForwardForStars',
@@ -362,35 +432,39 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
       </div>
     );
   }, [isForwarding, isStory, selectedCount, showComposer, caption, canCopyLink, displayedTotalStars,
-    paidChatsInfo, handleForwardToMultiple, handleCopyLink, lang, oldLang]);
+    paidChatsInfo, handleForwardToMultiple, handleCopyLink, lang]);
 
   if (!isOpen && !isShown) {
     return undefined;
   }
 
-  const confirmPaymentMessage = paidChatsInfo.totalStars > 0 ? lang(
+  const confirmTotalStars = pendingMusicTarget?.stars ?? paidChatsInfo.totalStars;
+  const confirmChatsCount = pendingMusicTarget ? 1 : paidChatsInfo.paidChatsCount;
+  const confirmMessagesCount = pendingMusicTarget ? 1 : paidChatsInfo.totalMessages;
+
+  const confirmPaymentMessage = confirmTotalStars > 0 ? lang(
     'ForwardPaidChatsConfirmation',
     {
       chatsSelected: lang(
         'ForwardPaidChatsSelected',
-        { paidChatsCount: paidChatsInfo.paidChatsCount },
-        { withNodes: true, withMarkdown: true, pluralValue: paidChatsInfo.paidChatsCount },
+        { paidChatsCount: confirmChatsCount },
+        { withNodes: true, withMarkdown: true, pluralValue: confirmChatsCount },
       ),
       payConfirmation: lang(
         'ForwardPaidChatsPayConfirmation',
         {
-          totalAmount: formatStarsAsText(lang, paidChatsInfo.totalStars),
-          count: paidChatsInfo.totalMessages,
+          totalAmount: formatStarsAsText(lang, confirmTotalStars),
+          count: confirmMessagesCount,
         },
-        { withNodes: true, withMarkdown: true, pluralValue: paidChatsInfo.totalMessages },
+        { withNodes: true, withMarkdown: true, pluralValue: confirmMessagesCount },
       ),
     },
     { withNodes: true },
   ) : undefined;
 
-  const confirmLabel = lang('PayForMessage', { count: paidChatsInfo.totalMessages }, {
+  const confirmLabel = lang('PayForMessage', { count: confirmMessagesCount }, {
     withNodes: true,
-    pluralValue: paidChatsInfo.totalMessages,
+    pluralValue: confirmMessagesCount,
   });
 
   return (
@@ -407,14 +481,15 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
         onSelectedIdsChange={handleSelectedIdsChange}
         onClose={handleClose}
         onCloseAnimationEnd={unmarkIsShown}
-        isForwarding={isForwarding}
+        isForwarding={isForwarding || isAudioTrack}
+        isNativeDialog
         withFolders
       />
       <ConfirmDialog
         title={lang('TitleConfirmPayment')}
         confirmLabel={confirmLabel}
         isOpen={isPaymentConfirmOpen}
-        onClose={closePaymentConfirm}
+        onClose={handlePaymentClose}
         confirmHandler={handlePaymentConfirm}
       >
         {confirmPaymentMessage}
@@ -429,16 +504,19 @@ const ForwardRecipientPicker: FC<OwnProps & StateProps> = ({
 };
 
 export default memo(withGlobal<OwnProps>((global): Complete<StateProps> => {
-  const { messageIds, storyId, fromChatId } = selectTabState(global).forwardMessages;
+  const {
+    messageIds, storyId, audioItem, fromChatId,
+  } = selectTabState(global).forwardMessages;
   const isForwarding = (messageIds && messageIds.length > 0);
 
   return {
     currentUserId: global.currentUserId,
-    isManyMessages: (messageIds?.length || 0) > 1,
     isStory: Boolean(storyId),
+    isAudioTrack: Boolean(audioItem),
     isForwarding,
     fromChatId,
     forwardMessageIds: messageIds,
     shouldPaidMessageAutoApprove: global.settings.byKey.shouldPaidMessageAutoApprove,
+    audioPendingSend: selectTabState(global).forwardMessages.audioPendingSend,
   };
 })(ForwardRecipientPicker));

@@ -1,12 +1,12 @@
-import Color from 'colorjs.io';
 import {
-  memo, useCallback, useEffect, useRef, useState,
+  memo, useEffect, useRef, useState,
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ThemeKey } from '../../../types';
 import type { RealTouchEvent } from '../../../util/captureEvents';
 
+import { buildColor, type Color, convertColor } from '../../../lib/color';
 import { selectTheme, selectThemeValues } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
 import { captureEvents } from '../../../util/captureEvents';
@@ -16,9 +16,11 @@ import {
   convertSrgbChannel,
   getPatternColor,
 } from '../../../util/colors';
+import { RESET_WALLPAPER_SETTINGS } from '../../../util/wallpaper';
 
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
+import useLastCallback from '../../../hooks/useLastCallback';
 
 import Island from '../../gili/layout/Island';
 import InputText from '../../ui/InputText';
@@ -163,15 +165,15 @@ const SettingsGeneralBackgroundColor = ({
   const { colorPosition = [0, 0], huePosition = 0 } = rectsRef.current
     ? buildPositionsFromColor(color, rectsRef.current) : {};
   const hex = buildHexFromColor(color);
-  const [hueCoord] = color.to('hsv').coords;
+  const [hueCoord] = convertColor(color, 'hsv').coords;
   const hue = hueCoord || 0;
   const hueHex = buildHexFromColor(
-    new Color('hsv', [hue, COLOR_PERCENT_MAX, COLOR_PERCENT_MAX]),
+    buildColor({ space: 'hsv', coords: [hue, COLOR_PERCENT_MAX, COLOR_PERCENT_MAX] }),
   );
 
   // Save value and update inputs when color changes
   useEffect(() => {
-    const rgb = color.to('srgb').coords.map(convertSrgbChannel);
+    const rgb = convertColor(color, 'srgb').coords.map(convertSrgbChannel);
     const hexColor = buildHexFromColor(color);
 
     setRgbInput(rgb.join(', '));
@@ -179,9 +181,10 @@ const SettingsGeneralBackgroundColor = ({
 
     if (!isFirstRunRef.current) {
       const patternColor = getPatternColor(color);
+      // The reset removes gradient and pattern fields so the selected color remains solid
       setThemeSettings({
         theme: themeRef.current!,
-        background: undefined,
+        ...RESET_WALLPAPER_SETTINGS,
         backgroundColor: hexColor,
         patternColor,
       });
@@ -199,7 +202,7 @@ const SettingsGeneralBackgroundColor = ({
     drawHue(huePickerRef.current!.firstChild as HTMLCanvasElement);
   }, []);
 
-  const handleRgbChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleRgbChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const rgbValue = e.currentTarget.value.replace(/[^\d, ]/g, '').slice(0, RGB_INPUT_MAX_LENGTH);
     const rgbMatch = rgbValue.match(RGB_COLOR_REGEX);
 
@@ -207,17 +210,20 @@ const SettingsGeneralBackgroundColor = ({
       const red = Number(rgbMatch[1].trim());
       const green = Number(rgbMatch[2].trim());
       const blue = Number(rgbMatch[3].trim());
-      setColor(new Color('srgb', [
-        red / RGB_CHANNEL_MAX,
-        green / RGB_CHANNEL_MAX,
-        blue / RGB_CHANNEL_MAX,
-      ]));
+      setColor(buildColor({
+        space: 'srgb',
+        coords: [
+          red / RGB_CHANNEL_MAX,
+          green / RGB_CHANNEL_MAX,
+          blue / RGB_CHANNEL_MAX,
+        ],
+      }));
     }
 
     e.currentTarget.value = rgbValue;
-  }, []);
+  });
 
-  const handleHexChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleHexChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const hexValue = e.currentTarget.value.replace(/[^0-9a-fA-F]/g, '').slice(0, HEX_INPUT_MAX_LENGTH);
 
     if (HEX_COLOR_REGEX.test(hexValue)) {
@@ -225,11 +231,11 @@ const SettingsGeneralBackgroundColor = ({
     }
 
     e.currentTarget.value = hexValue;
-  }, []);
+  });
 
-  const handlePredefinedColorClick = useCallback((e: React.MouseEvent<HTMLInputElement>) => {
+  const handlePredefinedColorClick = useLastCallback((e: React.MouseEvent<HTMLInputElement>) => {
     setColor(buildColorFromHex(e.currentTarget.dataset.color!));
-  }, []);
+  });
 
   const className = buildClassName(
     'SettingsGeneralBackgroundColor settings-content custom-scroll',
@@ -283,7 +289,7 @@ function getInitialColor(backgroundColor?: string) {
 }
 
 function buildPositionsFromColor(color: Color, rects: CanvasRects) {
-  const [hue, saturation, value] = color.to('hsv').coords;
+  const [hue, saturation, value] = convertColor(color, 'hsv').coords;
 
   return {
     colorPosition: [
@@ -298,11 +304,14 @@ function buildColorFromPositions(
   { colorPosition, huePosition }: { colorPosition: number[]; huePosition: number },
   rects: CanvasRects,
 ) {
-  return new Color('hsv', [
-    (huePosition / (rects.hueRect.width - 1)) * HSV_HUE_MAX,
-    (colorPosition[0] / (rects.colorRect.width - 1)) * COLOR_PERCENT_MAX,
-    (1 - colorPosition[1] / (rects.colorRect.height - 1)) * COLOR_PERCENT_MAX,
-  ]);
+  return buildColor({
+    space: 'hsv',
+    coords: [
+      (huePosition / (rects.hueRect.width - 1)) * HSV_HUE_MAX,
+      (colorPosition[0] / (rects.colorRect.width - 1)) * COLOR_PERCENT_MAX,
+      (1 - colorPosition[1] / (rects.colorRect.height - 1)) * COLOR_PERCENT_MAX,
+    ],
+  });
 }
 
 function drawColor(
@@ -333,8 +342,7 @@ function drawColor(
 
   const imageData = context!.createImageData(width, height);
   const pixels = imageData.data;
-  const [red, green, blue] = new Color('hsv', [hue, COLOR_PERCENT_MAX, COLOR_PERCENT_MAX])
-    .to('srgb')
+  const [red, green, blue] = convertColor({ space: 'hsv', coords: [hue, COLOR_PERCENT_MAX, COLOR_PERCENT_MAX] }, 'srgb')
     .coords
     .map(convertSrgbChannel);
 
@@ -375,8 +383,9 @@ function drawHue(canvas: HTMLCanvasElement) {
 
   for (let column = 0; column < width; column++) {
     const hue = (column / (width - 1)) * HSV_HUE_MAX;
-    const [red, green, blue] = new Color('hsv', [hue, COLOR_PERCENT_MAX, COLOR_PERCENT_MAX])
-      .to('srgb')
+    const [red, green, blue] = convertColor({
+      space: 'hsv', coords: [hue, COLOR_PERCENT_MAX, COLOR_PERCENT_MAX],
+    }, 'srgb')
       .coords
       .map(convertSrgbChannel);
 

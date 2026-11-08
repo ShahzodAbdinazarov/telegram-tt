@@ -1,6 +1,5 @@
-import type { FC } from '../../../lib/teact/teact';
 import {
-  memo, useCallback, useEffect,
+  memo, useCallback,
   useMemo, useState,
 } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
@@ -9,10 +8,10 @@ import type { ApiUser } from '../../../api/types';
 
 import { getUserFullName } from '../../../global/helpers';
 import { filterPeersByQuery } from '../../../global/helpers/peers';
-import { selectTabState } from '../../../global/selectors';
 import { unique } from '../../../util/iteratees';
 
 import useLang from '../../../hooks/useLang';
+import usePeerSearch, { userAccountSearch } from '../../../hooks/usePeerSearch';
 
 import ChatOrUserPicker from '../../common/pickers/ChatOrUserPicker';
 
@@ -25,47 +24,43 @@ type StateProps = {
   usersById: Record<string, ApiUser>;
   blockedIds: string[];
   contactIds?: string[];
-  localContactIds?: string[];
   currentUserId?: string;
 };
 
-const BlockUserModal: FC<OwnProps & StateProps> = ({
+const BlockUserModal = ({
   usersById,
   blockedIds,
   contactIds,
-  localContactIds,
   currentUserId,
   isOpen,
   onClose,
-}) => {
-  const {
-    setUserSearchQuery,
-    blockUser,
-  } = getActions();
+}: OwnProps & StateProps) => {
+  const { blockUser } = getActions();
 
   const lang = useLang();
   const [search, setSearch] = useState('');
-
-  useEffect(() => {
-    setUserSearchQuery({ query: search });
-  }, [search, setUserSearchQuery]);
+  const { result: foundIds, currentResultsQuery } = usePeerSearch({
+    query: search,
+    queryFn: userAccountSearch,
+  });
+  const relevantFoundIds = currentResultsQuery === search ? foundIds : undefined;
 
   const filteredContactIds = useMemo(() => {
     const availableContactIds = unique([
       ...(contactIds || []),
-      ...(localContactIds || []),
+      ...(relevantFoundIds || []),
     ].filter((contactId) => {
       return contactId !== currentUserId && !blockedIds.includes(contactId);
     }));
 
     return filterPeersByQuery({ ids: availableContactIds, query: search, type: 'user' })
       .sort((firstId, secondId) => {
-        const firstName = getUserFullName(usersById[firstId]) || '';
-        const secondName = getUserFullName(usersById[secondId]) || '';
+        const firstName = getUserFullName(lang, usersById[firstId]) || '';
+        const secondName = getUserFullName(lang, usersById[secondId]) || '';
 
         return firstName.localeCompare(secondName);
       });
-  }, [blockedIds, contactIds, currentUserId, search, localContactIds, usersById]);
+  }, [blockedIds, contactIds, currentUserId, search, relevantFoundIds, usersById, lang]);
 
   const handleRemoveUser = useCallback((userId: string) => {
     blockUser({ userId });
@@ -103,7 +98,6 @@ export default memo(withGlobal<OwnProps>(
       usersById,
       blockedIds,
       contactIds: contactList?.userIds,
-      localContactIds: selectTabState(global).userSearch.localUserIds,
       currentUserId,
     };
   },

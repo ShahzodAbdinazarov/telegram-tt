@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useMemo, useRef,
 } from '../../../lib/teact/teact';
@@ -18,7 +17,10 @@ import type {
   ApiUser,
   ApiWebPage,
 } from '../../../api/types';
-import type { IAnchorPosition, TranslationTone } from '../../../types';
+import type {
+  IAnchorPosition, MessageListType, ThreadId, TranslationTone,
+} from '../../../types';
+import type { ClipboardTextFormat, MessageCopyRequest } from '../../../types/messageCopy';
 
 import {
   getUserFullName,
@@ -37,15 +39,15 @@ import useAppLayout from '../../../hooks/useAppLayout';
 import useFlag from '../../../hooks/useFlag';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
 import AvatarList from '../../common/AvatarList';
 import Icon from '../../common/icons/Icon';
 import Menu from '../../ui/Menu';
-import MenuItem from '../../ui/MenuItem';
+import MenuItem, { MenuItemSubtitle, MenuItemTitle } from '../../ui/MenuItem';
 import MenuSeparator from '../../ui/MenuSeparator';
 import NestedMenuItem from '../../ui/NestedMenuItem';
 import Skeleton from '../../ui/placeholder/Skeleton';
+import DeleteMenuItem from './DeleteMenuItem';
 import LastEditTimeMenuItem from './LastEditTimeMenuItem';
 import ReactionSelector from './reactions/ReactionSelector';
 import ReadTimeMenuItem from './ReadTimeMenuItem';
@@ -60,7 +62,10 @@ type OwnProps = {
   isOpen: boolean;
   anchor: IAnchorPosition;
   targetHref?: string;
+  isAltKeyPressed?: boolean;
   message: ApiMessage;
+  threadId: ThreadId;
+  messageListType: MessageListType;
   chat?: ApiChat;
   poll?: ApiMessagePoll;
   webPage?: ApiWebPage;
@@ -96,6 +101,10 @@ type OwnProps = {
   isCurrentUserPremium?: boolean;
   canDownload?: boolean;
   canSaveGif?: boolean;
+  canManageMusicInProfile?: boolean;
+  isMusicProfileStatusLoaded?: boolean;
+  isMusicProfileActionLoading?: boolean;
+  isMusicSaved?: boolean;
   canRevote?: boolean;
   canClosePoll?: boolean;
   isDownloading?: boolean;
@@ -125,10 +134,11 @@ type OwnProps = {
   onClose: NoneToVoidFunction;
   onCloseAnimationEnd?: NoneToVoidFunction;
   onCopyLink?: NoneToVoidFunction;
-  onCopyMessages?: (messageIds: number[]) => void;
+  onCopyMessages?: (request: MessageCopyRequest, textFormat?: ClipboardTextFormat) => void;
   onCopyNumber?: NoneToVoidFunction;
   onDownload?: NoneToVoidFunction;
   onSaveGif?: NoneToVoidFunction;
+  onToggleMusicInProfile?: NoneToVoidFunction;
   onCancelVote?: NoneToVoidFunction;
   onClosePoll?: NoneToVoidFunction;
   onShowSeenBy?: NoneToVoidFunction;
@@ -143,6 +153,7 @@ type OwnProps = {
   onReactionPickerOpen?: (position: IAnchorPosition) => void;
   userFullName?: string;
   canGift?: boolean;
+  canSendGram?: boolean;
   noForwardsNotice?: string;
 };
 
@@ -150,13 +161,15 @@ const SCROLLBAR_WIDTH = 10;
 const REACTION_SELECTOR_WIDTH_REM = 19.25;
 const ANIMATION_DURATION = 200;
 
-const MessageContextMenu: FC<OwnProps> = ({
+const MessageContextMenu = ({
   isReactionPickerOpen,
   availableReactions,
   topReactions,
   defaultTagReactions,
   isOpen,
   message,
+  threadId,
+  messageListType,
   chat,
   poll,
   webPage,
@@ -168,6 +181,7 @@ const MessageContextMenu: FC<OwnProps> = ({
   reactionsLimit,
   anchor,
   targetHref,
+  isAltKeyPressed,
   canSendNow,
   canReschedule,
   canBuyPremium,
@@ -188,6 +202,10 @@ const MessageContextMenu: FC<OwnProps> = ({
   canSelect,
   canDownload,
   canSaveGif,
+  canManageMusicInProfile,
+  isMusicProfileStatusLoaded,
+  isMusicProfileActionLoading,
+  isMusicSaved,
   canRevote,
   canClosePoll,
   canTranslate,
@@ -226,6 +244,7 @@ const MessageContextMenu: FC<OwnProps> = ({
   onCopyNumber,
   onDownload,
   onSaveGif,
+  onToggleMusicInProfile,
   onCancelVote,
   onClosePoll,
   onShowSeenBy,
@@ -241,14 +260,16 @@ const MessageContextMenu: FC<OwnProps> = ({
   onSelectLanguage,
   userFullName,
   canGift,
+  canSendGram,
   noForwardsNotice,
-}) => {
+}: OwnProps) => {
   const {
     showNotification, openStickerSet, openCustomEmojiSets, loadStickers, openGiftModal,
+    openWalletTransferLink,
   } = getActions();
   const menuRef = useRef<HTMLDivElement>();
   const scrollableRef = useRef<HTMLDivElement>();
-  const oldLang = useOldLang();
+
   const lang = useLang();
   const noReactions = !isPrivate && !enabledReactions;
   const areReactionsPossible = message.areReactionsPossible;
@@ -274,6 +295,7 @@ const MessageContextMenu: FC<OwnProps> = ({
     [poll?.summary.isRestrictedToSubscribers, pollSubscriberRestrictionChannel],
   );
   const hasPollRestrictionMessage = Boolean(pollSubscriberRestrictionMessage) || Boolean(pollCountryRestrictionMessage);
+  const autoDeleteAt = message.ttlPeriod ? message.date + message.ttlPeriod : undefined;
   const shouldRenderInfoSection = Boolean(
     canLoadReadDate || shouldRenderShowWhen || isEdited || noForwardsNotice || hasPollRestrictionMessage,
   );
@@ -289,13 +311,21 @@ const MessageContextMenu: FC<OwnProps> = ({
 
   const handleAfterCopy = useLastCallback(() => {
     showNotification({
-      message: oldLang('Share.Link.Copied'),
+      message: {
+        key: 'ShareLinkCopied',
+        options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+      },
     });
     onClose();
   });
 
   const handleGiftClick = useLastCallback(() => {
     openGiftModal({ forUserId: message.chatId });
+    onClose();
+  });
+
+  const handleSendGramClick = useLastCallback(() => {
+    openWalletTransferLink({ userId: message.chatId, shouldCloseAfterSend: true });
     onClose();
   });
 
@@ -331,6 +361,8 @@ const MessageContextMenu: FC<OwnProps> = ({
   const copyOptions = getMessageCopyOptions(
     message,
     groupStatefulContent({ poll, webPage, story }),
+    threadId,
+    messageListType,
     targetHref,
     canCopy,
     handleAfterCopy,
@@ -431,42 +463,49 @@ const MessageContextMenu: FC<OwnProps> = ({
         {shouldShowGiftButton
           && (
             <MenuItem icon="gift" onClick={handleGiftClick}>
-              {message?.isOutgoing ? oldLang('SendAnotherGift')
-                : oldLang('Conversation.ContextMenuSendGiftTo', userFullName)}
+              {message?.isOutgoing ? lang('SendAnotherGift')
+                : lang('ConversationContextMenuSendGiftTo', { user: userFullName })}
             </MenuItem>
           )}
-        {canSendNow && <MenuItem icon="send-outline" onClick={onSend}>{oldLang('MessageScheduleSend')}</MenuItem>}
+        {canSendGram && (
+          <MenuItem icon="gram-outline" onClick={handleSendGramClick}>
+            {lang('WalletSendMoney')}
+          </MenuItem>
+        )}
+        {canSendNow && <MenuItem icon="send-outline" onClick={onSend}>{lang('MessageScheduleSend')}</MenuItem>}
         {canReschedule && (
-          <MenuItem icon="schedule" onClick={onReschedule}>{oldLang('MessageScheduleEditTime')}</MenuItem>
+          <MenuItem icon="schedule" onClick={onReschedule}>{lang('MessageScheduleEditTime')}</MenuItem>
         )}
         {canReply && (
           <MenuItem icon="reply" onClick={onReply}>
-            {oldLang(canQuote ? 'lng_context_quote_and_reply' : 'Reply')}
+            {lang(canQuote ? 'ContextQuoteAndReply' : 'Reply')}
           </MenuItem>
         )}
         {!noReplies && Boolean(repliesThreadInfo?.messagesCount) && (
           <MenuItem icon="replies" onClick={onOpenThread}>
-            {oldLang('Conversation.ContextViewReplies', repliesThreadInfo.messagesCount, 'i')}
+            {lang('ConversationContextViewReplies', {
+              count: lang.number(repliesThreadInfo.messagesCount),
+            }, { pluralValue: repliesThreadInfo.messagesCount })}
           </MenuItem>
         )}
-        {canEdit && <MenuItem icon="edit" onClick={onEdit}>{oldLang('Edit')}</MenuItem>}
+        {canEdit && <MenuItem icon="edit" onClick={onEdit}>{lang('Edit')}</MenuItem>}
         {canAppendTodoList && (
           <MenuItem icon="add" onClick={onAppendTodoList}>
             {lang('MenuButtonAppendTodoList')}
           </MenuItem>
         )}
         {canFaveSticker && (
-          <MenuItem icon="favorite" onClick={onFaveSticker}>{oldLang('AddToFavorites')}</MenuItem>
+          <MenuItem icon="star-regular" onClick={onFaveSticker}>{lang('AddToFavorites')}</MenuItem>
         )}
         {canUnfaveSticker && (
-          <MenuItem icon="favorite" onClick={onUnfaveSticker}>{oldLang('Stickers.RemoveFromFavorites')}</MenuItem>
+          <MenuItem icon="star-regular" onClick={onUnfaveSticker}>{lang('StickersRemoveFromFavorites')}</MenuItem>
         )}
         {canTranslate && (
-          <MenuItem icon="language" onClick={() => onTranslate?.()}>{oldLang('TranslateMessage')}</MenuItem>
+          <MenuItem icon="language" onClick={() => onTranslate?.()}>{lang('AiMessageEditorTranslate')}</MenuItem>
         )}
         {canShowOriginal && (
           <MenuItem icon="language" onClick={onShowOriginal}>
-            {oldLang('ShowOriginalButton')}
+            {lang('ShowOriginalButton')}
           </MenuItem>
         )}
         {canShowOriginal && (
@@ -476,21 +515,21 @@ const MessageContextMenu: FC<OwnProps> = ({
             submenu={(
               <>
                 <MenuItem
-                  icon={currentTranslationTone === 'neutral' ? 'message-succeeded' : undefined}
+                  icon={currentTranslationTone === 'neutral' ? 'check' : undefined}
                   customIcon={currentTranslationTone !== 'neutral' ? <Icon name="placeholder" /> : undefined}
                   onClick={() => onTranslateWithTone?.('neutral')}
                 >
                   {lang('TranslationToneNeutral')}
                 </MenuItem>
                 <MenuItem
-                  icon={currentTranslationTone === 'formal' ? 'message-succeeded' : undefined}
+                  icon={currentTranslationTone === 'formal' ? 'check' : undefined}
                   customIcon={currentTranslationTone !== 'formal' ? <Icon name="placeholder" /> : undefined}
                   onClick={() => onTranslateWithTone?.('formal')}
                 >
                   {lang('TranslationToneFormal')}
                 </MenuItem>
                 <MenuItem
-                  icon={currentTranslationTone === 'casual' ? 'message-succeeded' : undefined}
+                  icon={currentTranslationTone === 'casual' ? 'check' : undefined}
                   customIcon={currentTranslationTone !== 'casual' ? <Icon name="placeholder" /> : undefined}
                   onClick={() => onTranslateWithTone?.('casual')}
                 >
@@ -503,32 +542,76 @@ const MessageContextMenu: FC<OwnProps> = ({
           </NestedMenuItem>
         )}
         {canSelectLanguage && (
-          <MenuItem icon="web" onClick={onSelectLanguage}>{oldLang('lng_settings_change_lang')}</MenuItem>
+          <MenuItem icon="web" onClick={onSelectLanguage}>{lang('Language')}</MenuItem>
         )}
         {copyOptions.map((option) => (
-          <MenuItem
-            key={option.label}
-            icon={option.icon}
-            onClick={option.handler}
-            withPreventDefaultOnMouseDown
-          >
-            {oldLang(option.label)}
-          </MenuItem>
+          isAltKeyPressed && option.canCopyWithFormat ? (
+            <NestedMenuItem
+              key={option.label}
+              icon={option.icon}
+              submenu={(
+                <>
+                  <MenuItem onClick={() => option.handler('plainText')}>{lang('CopyAsText')}</MenuItem>
+                  <MenuItem onClick={() => option.handler('html')}>{lang('CopyAsHtml')}</MenuItem>
+                  <MenuItem onClick={() => option.handler('markdown')}>{lang('CopyAsMarkdown')}</MenuItem>
+                </>
+              )}
+            >
+              {lang('Copy')}
+            </NestedMenuItem>
+          ) : (
+            <MenuItem
+              key={option.label}
+              icon={option.icon}
+              onClick={() => option.handler()}
+              withPreventDefaultOnMouseDown
+            >
+              {lang(option.label)}
+            </MenuItem>
+          )
         ))}
-        {canPin && <MenuItem icon="pin" onClick={onPin}>{oldLang('DialogPin')}</MenuItem>}
-        {canUnpin && <MenuItem icon="unpin" onClick={onUnpin}>{oldLang('DialogUnpin')}</MenuItem>}
-        {canSaveGif && <MenuItem icon="gifs" onClick={onSaveGif}>{oldLang('lng_context_save_gif')}</MenuItem>}
-        {canRevote && <MenuItem icon="revote" onClick={onCancelVote}>{oldLang('lng_polls_retract')}</MenuItem>}
-        {canClosePoll && <MenuItem icon="stop" onClick={onClosePoll}>{oldLang('lng_polls_stop')}</MenuItem>}
+        {canPin && <MenuItem icon="pin" onClick={onPin}>{lang('DialogPin')}</MenuItem>}
+        {canUnpin && <MenuItem icon="unpin" onClick={onUnpin}>{lang('DialogUnpin')}</MenuItem>}
+        {canSaveGif && <MenuItem icon="gifs" onClick={onSaveGif}>{lang('ContextSaveGif')}</MenuItem>}
+        {canManageMusicInProfile && (
+          !isMusicProfileStatusLoaded ? (
+            <MenuItem customIcon={<span className="profile-music-menu-icon-placeholder" />} disabled>
+              <Skeleton className="profile-music-menu-label-placeholder" animation="wave" />
+            </MenuItem>
+          ) : (
+            <MenuItem
+              icon={isMusicSaved ? 'remove-music' : 'add-music'}
+              disabled={isMusicProfileActionLoading}
+              onClick={onToggleMusicInProfile}
+            >
+              {lang(isMusicSaved ? 'AudioRemoveFromProfile' : 'AudioAddToProfile')}
+            </MenuItem>
+          )
+        )}
+        {canRevote && <MenuItem icon="revote" onClick={onCancelVote}>{lang('PollsRetract')}</MenuItem>}
+        {canClosePoll && <MenuItem icon="stop" onClick={onClosePoll}>{lang('PollsStop')}</MenuItem>}
         {canDownload && (
           <MenuItem icon="download" onClick={onDownload}>
-            {isDownloading ? oldLang('lng_context_cancel_download') : oldLang('lng_media_download')}
+            {isDownloading ? lang('ContextCancelDownload') : lang('AccActionDownload')}
           </MenuItem>
         )}
-        {canForward && <MenuItem icon="forward" onClick={onForward}>{oldLang('Forward')}</MenuItem>}
-        {canSelect && <MenuItem icon="select" onClick={onSelect}>{oldLang('Common.Select')}</MenuItem>}
-        {canReport && <MenuItem icon="flag" onClick={onReport}>{oldLang('lng_context_report_msg')}</MenuItem>}
-        {canDelete && <MenuItem destructive icon="delete" onClick={onDelete}>{oldLang('Delete')}</MenuItem>}
+        {canForward && <MenuItem icon="forward" onClick={onForward}>{lang('Forward')}</MenuItem>}
+        {canSelect && <MenuItem icon="select" onClick={onSelect}>{lang('CommonSelect')}</MenuItem>}
+        {canReport && <MenuItem icon="flag" onClick={onReport}>{lang('ReportPeerReport')}</MenuItem>}
+        {canDelete && (message.anchorMsgId ? (
+          <MenuItem destructive icon="reload" onClick={onDelete}>
+            <MenuItemTitle>{lang('EphemeralRevert')}</MenuItemTitle>
+            <MenuItemSubtitle>{lang('EphemeralRevertDescription')}</MenuItemSubtitle>
+          </MenuItem>
+        ) : <DeleteMenuItem autoDeleteAt={autoDeleteAt} onDelete={onDelete} />)}
+        {message.isEphemeral && (
+          <>
+            <MenuSeparator size="thick" />
+            <MenuItem className="smaller" disabled withWrap>
+              {lang(message.anchorMsgId ? 'EphemeralAnchoredNotice' : 'EphemeralContextMenuNotice')}
+            </MenuItem>
+          </>
+        )}
         {hasCustomEmoji && (
           <>
             <MenuSeparator size="thick" />
@@ -540,14 +623,16 @@ const MessageContextMenu: FC<OwnProps> = ({
             )}
             {customEmojiSets && customEmojiSets.length === 1 && (
               <MenuItem withWrap onClick={handleOpenCustomEmojiSets} className="menu-custom-emoji-sets">
-                {renderText(
-                  oldLang('MessageContainsEmojiPack', customEmojiSets[0].title), ['simple_markdown', 'emoji'],
-                )}
+                {lang('MessageContainsEmojiPack', { pack: customEmojiSets[0].title }, {
+                  withNodes: true, withMarkdown: true,
+                })}
               </MenuItem>
             )}
             {customEmojiSets && customEmojiSets.length > 1 && (
               <MenuItem withWrap onClick={handleOpenCustomEmojiSets} className="menu-custom-emoji-sets">
-                {renderText(oldLang('MessageContainsEmojiPacks', customEmojiSets.length), ['simple_markdown'])}
+                {lang('MessageContainsEmojiPacks', { count: customEmojiSets.length }, {
+                  pluralValue: customEmojiSets.length, withNodes: true, withMarkdown: true,
+                })}
               </MenuItem>
             )}
           </>
@@ -577,7 +662,7 @@ const MessageContextMenu: FC<OwnProps> = ({
                     seenByDatesCount === 1 && seenByRecentPeers
                       ? renderText(
                         isUserId(seenByRecentPeers[0].id)
-                          ? getUserFullName(seenByRecentPeers[0] as ApiUser)!
+                          ? getUserFullName(lang, seenByRecentPeers[0] as ApiUser)!
                           : (seenByRecentPeers[0] as ApiChat).title,
                       ) : (
                         seenByDatesCount

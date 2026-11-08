@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useLayoutEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
@@ -14,7 +13,8 @@ import {
   isGeoLiveExpired,
 } from '../../../global/helpers';
 import buildClassName from '../../../util/buildClassName';
-import { formatCountdownShort, formatLocationLastUpdate } from '../../../util/dates/oldDateFormat';
+import { formatCountdownShort } from '../../../util/dates/duration';
+import { formatRecentTimestamp, secondsToDate } from '../../../util/localization/dateFormat';
 import {
   getMetersPerPixel, getVenueColor, getVenueIconUrl,
 } from '../../../util/map';
@@ -23,9 +23,9 @@ import { getServerTime } from '../../../util/serverTime';
 import useInterval from '../../../hooks/schedulers/useInterval';
 import useTimeout from '../../../hooks/schedulers/useTimeout';
 import useForceUpdate from '../../../hooks/useForceUpdate';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
-import useOldLang from '../../../hooks/useOldLang';
 import usePreviousDeprecated from '../../../hooks/usePreviousDeprecated';
 import useDevicePixelRatio from '../../../hooks/window/useDevicePixelRatio';
 
@@ -40,8 +40,8 @@ const TIMER_RADIUS = 12;
 const TIMER_CIRCUMFERENCE = TIMER_RADIUS * 2 * Math.PI;
 const MOVE_THRESHOLD = 0.0001; // ~11m
 const DEFAULT_MAP_CONFIG = {
-  width: 400,
-  height: 300,
+  width: 480,
+  height: 360,
   zoom: 16,
 };
 
@@ -53,14 +53,14 @@ type OwnProps = {
   theme: ThemeKey;
 };
 
-const Location: FC<OwnProps> = ({
+const Location = ({
   message,
   peer,
-}) => {
+}: OwnProps) => {
   const { openMapModal } = getActions();
   const ref = useRef<HTMLDivElement>();
   const countdownRef = useRef<HTMLDivElement>();
-  const lang = useOldLang();
+  const lang = useLang();
   const forceUpdate = useForceUpdate();
 
   const location = getMessageLocation(message)!;
@@ -159,7 +159,7 @@ const Location: FC<OwnProps> = ({
         <div className="location-info">
           <div className="location-info-title">{lang('AttachLiveLocation')}</div>
           <div className="location-info-subtitle">
-            {formatLocationLastUpdate(lang, serverTime, message.editDate)}
+            {formatRecentTimestamp(lang, secondsToDate(message.editDate ?? message.date), { context: 'location' })}
           </div>
           {!isExpired && (
             <div className="geo-countdown" ref={countdownRef}>
@@ -184,14 +184,13 @@ const Location: FC<OwnProps> = ({
   }
 
   function renderMap() {
-    if (!mapBlobUrl) return <Skeleton width={width} height={height} animation="pulse" />;
+    if (!mapBlobUrl) return <Skeleton animation="pulse" />;
     return (
       <img
         className="full-media map"
         src={mapBlobUrl}
-        alt="Location on a map"
+        alt={lang('MediaLocaltionImageAlt')}
         draggable={false}
-        style={`width: ${DEFAULT_MAP_CONFIG.width}px; height: ${DEFAULT_MAP_CONFIG.height}px;`}
       />
     );
   }

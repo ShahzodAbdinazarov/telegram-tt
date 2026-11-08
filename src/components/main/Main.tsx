@@ -2,17 +2,16 @@ import '../../global/actions/all';
 
 import {
   beginHeavyAnimation,
-  memo, useEffect, useLayoutEffect,
+  memo, onFullyIdle, useEffect, useLayoutEffect,
   useRef, useState,
 } from '../../lib/teact/teact';
-import { addExtraClass } from '../../lib/teact/teact-dom';
+import { addExtraClass, setExtraStyles } from '../../lib/teact/teact-dom';
 import { getActions, getGlobal, withGlobal } from '../../global';
 
 import type { ApiChatFolder, ApiLimitTypeWithModal, ApiStarGiftAuctionState, ApiUser } from '../../api/types';
 import type { TabState } from '../../global/types';
-import type { ThemeKey } from '../../types';
 
-import { BASE_EMOJI_KEYWORD_LANG, DEBUG, FOLDERS_POSITION_LEFT, INACTIVE_MARKER } from '../../config';
+import { BASE_EMOJI_KEYWORD_LANG, DEBUG, FOLDERS_POSITION_LEFT } from '../../config';
 import { requestNextMutation } from '../../lib/fasterdom/fasterdom';
 import {
   selectAreFoldersPresent,
@@ -26,31 +25,28 @@ import {
   selectIsMediaViewerOpen,
   selectIsReactionPickerOpen,
   selectIsRightColumnShown,
-  selectIsServiceChatReady,
   selectIsStoryViewerOpen,
   selectPerformanceSettingsValue,
   selectTabSelectedGiftAuction,
   selectTabState,
-  selectTheme,
-  selectThemeValues,
   selectUser,
 } from '../../global/selectors';
 import { selectSharedSettings } from '../../global/selectors/sharedState';
 import { IS_TAURI } from '../../util/browser/globalEnvironment';
 import { IS_ANDROID, IS_MAC_OS, IS_WAVE_TRANSFORM_SUPPORTED } from '../../util/browser/windowEnvironment';
 import buildClassName from '../../util/buildClassName';
-import buildStyle from '../../util/buildStyle';
 import { waitForTransitionEnd } from '../../util/cssAnimationEndListeners';
 import { processDeepLink } from '../../util/deeplink';
 import { Bundles, loadBundle } from '../../util/moduleLoader';
 import { parseInitialLocationHash, parseLocationHash } from '../../util/routing';
 import updateIcon from '../../util/updateIcon';
+import { REM } from '../common/helpers/mediaDimensions';
+import { updateTopReserveWithScrollCompensation } from '../middle/helpers/messageListReserves';
 
 import useInterval from '../../hooks/schedulers/useInterval';
 import useTimeout from '../../hooks/schedulers/useTimeout';
 import useTauriEvent from '../../hooks/tauri/useTauriEvent';
 import useAppLayout from '../../hooks/useAppLayout';
-import useCustomBackground from '../../hooks/useCustomBackground';
 import useForceUpdate from '../../hooks/useForceUpdate';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
@@ -60,6 +56,7 @@ import useSyncEffect from '../../hooks/useSyncEffect';
 import useBackgroundMode from '../../hooks/window/useBackgroundMode';
 import useBeforeUnload from '../../hooks/window/useBeforeUnload';
 import { useFullscreenStatus } from '../../hooks/window/useFullscreen';
+import { PANE_GAP_REM, type PaneState } from '../middle/hooks/useHeaderPane';
 
 import ActiveCallHeader from '../calls/ActiveCallHeader.async';
 import GroupCall from '../calls/group/GroupCall.async';
@@ -69,12 +66,14 @@ import CustomEmojiSetsModal from '../common/CustomEmojiSetsModal.async';
 import DeleteMessageModal from '../common/DeleteMessageModal.async';
 import StickerSetModal from '../common/StickerSetModal.async';
 import UnreadCount from '../common/UnreadCounter';
+import Wallpaper from '../common/Wallpaper';
 import LeftColumn from '../left/LeftColumn';
 import MediaViewer from '../mediaViewer/MediaViewer.async';
 import ReactionPicker from '../middle/message/reactions/ReactionPicker.async';
 import MessageListHistoryHandler from '../middle/MessageListHistoryHandler';
 import MiddleColumn from '../middle/MiddleColumn';
 import AudioPlayer from '../middle/panes/AudioPlayer';
+import FloatingRoundVideo from '../middle/panes/FloatingRoundVideo';
 import ModalContainer from '../modals/ModalContainer';
 import PaymentModal from '../payment/PaymentModal.async';
 import ReceiptModal from '../payment/ReceiptModal.async';
@@ -109,6 +108,7 @@ export interface OwnProps {
 type StateProps = {
   isMasterTab?: boolean;
   currentUserId?: string;
+  hasCurrentUser?: boolean;
   isLeftColumnOpen: boolean;
   isMiddleColumnOpen: boolean;
   isRightColumnOpen: boolean;
@@ -120,7 +120,6 @@ type StateProps = {
   openedStickerSetShortName?: string;
   openedCustomEmojiSetIds?: string[];
   activeGroupCallId?: string;
-  isServiceChatReady?: boolean;
   wasTimeFormatSetManually?: boolean;
   isPhoneCallActive?: boolean;
   addedSetIds?: string[];
@@ -153,15 +152,11 @@ type StateProps = {
   isFoldersSidebarShown: boolean;
   diceEmojies?: string[];
   selectedGiftAuction?: ApiStarGiftAuctionState;
-  theme: ThemeKey;
-  customBackground?: string;
-  backgroundColor?: string;
-  patternColor?: string;
-  isBackgroundBlurred?: boolean;
 };
 
 const APP_OUTDATED_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 const CALL_BUNDLE_LOADING_DELAY_MS = 5000; // 5 sec
+const EDITOR_BUNDLE_LOADING_DELAY_MS = 10000; // 10 sec
 
 let DEBUG_isLogged = false;
 
@@ -179,7 +174,6 @@ const Main = ({
   limitReached,
   openedStickerSetShortName,
   openedCustomEmojiSetIds,
-  isServiceChatReady,
   withInterfaceAnimations,
   wasTimeFormatSetManually,
   addedSetIds,
@@ -208,16 +202,12 @@ const Main = ({
   noRightColumnAnimation,
   isSynced,
   currentUserId,
+  hasCurrentUser,
   isAccountFrozen,
   isAppConfigLoaded,
   isFoldersSidebarShown,
   diceEmojies,
   selectedGiftAuction,
-  theme,
-  customBackground,
-  backgroundColor,
-  patternColor,
-  isBackgroundBlurred,
 }: OwnProps & StateProps) => {
   const {
     initMain,
@@ -245,10 +235,10 @@ const Main = ({
     ensureTimeFormat,
     closeStickerSetModal,
     closeCustomEmojiSets,
-    checkVersionNotification,
     loadConfig,
     loadAppConfig,
     loadAttachBots,
+    loadWalletState,
     loadContactList,
     loadCustomEmojis,
     loadGenericEmojiEffects,
@@ -286,7 +276,7 @@ const Main = ({
 
   if (DEBUG && !DEBUG_isLogged) {
     DEBUG_isLogged = true;
-    // eslint-disable-next-line no-console, @eslint-react/purity
+    // eslint-disable-next-line no-console
     console.log('>>> RENDER MAIN');
   }
 
@@ -296,6 +286,12 @@ const Main = ({
   useTimeout(() => {
     void loadBundle(Bundles.Calls);
   }, CALL_BUNDLE_LOADING_DELAY_MS);
+
+  useTimeout(() => {
+    onFullyIdle(() => {
+      void loadBundle(Bundles.Editor);
+    });
+  }, isSynced ? EDITOR_BUNDLE_LOADING_DELAY_MS : undefined);
 
   const containerRef = useRef<HTMLDivElement>();
   const leftColumnRef = useRef<HTMLDivElement>();
@@ -337,7 +333,6 @@ const Main = ({
   // Initial API calls
   useEffect(() => {
     if (isMasterTab && isSynced && isAppConfigLoaded && !isAccountFrozen) {
-      loadAllChats({ listType: 'saved' });
       loadAllStories();
       loadAllHiddenStories();
       loadPromoData();
@@ -345,6 +340,12 @@ const Main = ({
       loadRecentReactions();
       loadDefaultTagReactions();
       loadAttachBots();
+
+      // `wallet.getState` creates the wallet on first call, so it is only made where the wallet is rolled out
+      if (getGlobal().appConfig.isWalletAvailable) {
+        loadWalletState();
+      }
+
       loadNotificationSettings();
       loadNotificationExceptions();
       loadTopPeers({ category: 'botsInline' });
@@ -374,6 +375,13 @@ const Main = ({
       loadActiveGiftAuctions();
     }
   }, [isMasterTab, isSynced, isAppConfigLoaded, isAccountFrozen]);
+
+  // The saved list is keyed on the current user, who may land in the global after the first sync
+  useEffect(() => {
+    if (isMasterTab && isSynced && isAppConfigLoaded && !isAccountFrozen && hasCurrentUser) {
+      loadAllChats({ listType: 'saved' });
+    }
+  }, [isMasterTab, isSynced, isAppConfigLoaded, isAccountFrozen, hasCurrentUser]);
 
   // Initial Premium API calls
   useEffect(() => {
@@ -428,13 +436,6 @@ const Main = ({
     loadBotFreezeAppeal();
   }, [isAppConfigLoaded]);
 
-  // Check version when service chat is ready
-  useEffect(() => {
-    if (isServiceChatReady && isMasterTab) {
-      checkVersionNotification();
-    }
-  }, [isServiceChatReady, isMasterTab]);
-
   // Ensure time format
   useEffect(() => {
     if (!wasTimeFormatSetManually) {
@@ -449,7 +450,7 @@ const Main = ({
 
     const parsedInitialLocationHash = parseInitialLocationHash();
     if (parsedInitialLocationHash?.tgaddr) {
-      processDeepLink(decodeURIComponent(parsedInitialLocationHash.tgaddr), { type: 'inner' });
+      processDeepLink(parsedInitialLocationHash.tgaddr, { type: 'inner' });
     }
   }, [isSynced]);
 
@@ -561,15 +562,8 @@ const Main = ({
     });
   }, [isMiddleColumnOpen, isRightColumnOpen, noRightColumnAnimation, forceUpdate]);
 
-  const customBackgroundValue = useCustomBackground(theme, customBackground);
-
   const bgClassName = buildClassName(
-    backgroundStyles.background,
     !noRightColumnAnimation && backgroundStyles.withTransition,
-    customBackground && backgroundStyles.customBgImage,
-    backgroundColor && backgroundStyles.customBgColor,
-    customBackground && isBackgroundBlurred && backgroundStyles.blurred,
-    isRightColumnOpen && backgroundStyles.withRightColumn,
   );
 
   const className = buildClassName(
@@ -588,11 +582,31 @@ const Main = ({
   const handleFocus = useLastCallback(() => {
     onTabFocusChange({ isBlurred: false });
 
-    if (!document.title.includes(INACTIVE_MARKER)) {
-      updatePageTitle();
-    }
+    updatePageTitle();
 
     updateIcon(false);
+  });
+
+  const playerReserveRef = useRef(0);
+  const handlePlayerPaneStateChange = useLastCallback(({ height }: PaneState) => {
+    const main = containerRef.current;
+    const middleColumn = document.getElementById('MiddleColumn');
+    if (!main || !middleColumn) return;
+    const occupiedHeight = height ? height + PANE_GAP_REM * REM : 0;
+    const heightDelta = occupiedHeight - playerReserveRef.current;
+    if (!heightDelta) return;
+    playerReserveRef.current = occupiedHeight;
+    const parkedShift = occupiedHeight ? '0px' : 'var(--middle-panel-inline-padding)';
+    updateTopReserveWithScrollCompensation(middleColumn, heightDelta, () => {
+      setExtraStyles(main, {
+        '--middle-header-player-height': `${occupiedHeight}px`,
+        '--middle-header-player-parked': parkedShift,
+      });
+      setExtraStyles(middleColumn, {
+        '--middle-header-player-height': `${occupiedHeight}px`,
+        '--middle-header-player-parked': parkedShift,
+      });
+    }, [main]);
   });
 
   const handleStickerSetModalClose = useLastCallback(() => {
@@ -609,25 +623,22 @@ const Main = ({
   usePreventPinchZoomGesture(isMediaViewerOpen || isStoryViewerOpen);
 
   return (
-    <div
-      ref={containerRef}
+    <Wallpaper
+      containerRef={containerRef}
       id="Main"
       className={className}
-      style={buildStyle(
-        patternColor && `--pattern-color: ${patternColor}`,
-        backgroundColor && `--theme-background-color: ${backgroundColor}`,
-      )}
+      bgClassName={bgClassName}
     >
-      <div
-        className={bgClassName}
-        style={customBackgroundValue ? `--custom-background: ${customBackgroundValue}` : undefined}
-      />
       {IS_TAURI && IS_MAC_OS && (
         <div className="tauri-drag-region" data-tauri-drag-region />
       )}
       <FoldersSidebar isMobile={isMobile} isActive={isFoldersSidebarShown} />
       <LeftColumn ref={leftColumnRef} isFoldersSidebarShown={isFoldersSidebarShown} />
-      <MiddleColumn leftColumnRef={leftColumnRef} isMobile={isMobile} />
+      <MiddleColumn
+        leftColumnRef={leftColumnRef}
+        isMobile={isMobile}
+        onPlayerPaneStateChange={handlePlayerPaneStateChange}
+      />
       <RightColumn isMobile={isMobile} />
       <MediaViewer isOpen={isMediaViewerOpen} />
       <StoryViewer isOpen={isStoryViewerOpen} />
@@ -635,6 +646,7 @@ const Main = ({
       <DraftRecipientPicker requestedDraft={requestedDraft} />
       <Dialogs />
       <AudioPlayer noUi />
+      <FloatingRoundVideo />
       <ModalContainer />
       <HistoryCalendar isOpen={isHistoryCalendarOpen} />
       <StickerSetModal
@@ -680,7 +692,7 @@ const Main = ({
       <DeleteFolderDialog folder={deleteFolderDialog} />
       <ReactionPicker isOpen={isReactionPickerOpen} />
       <DeleteMessageModal isOpen={isDeleteMessageModalOpen} />
-    </div>
+    </Wallpaper>
   );
 };
 
@@ -725,11 +737,10 @@ export default memo(withGlobal<OwnProps>(
 
     const deleteFolderDialog = deleteFolderDialogModal ? selectChatFolder(global, deleteFolderDialogModal) : undefined;
     const isAccountFrozen = selectIsCurrentUserFrozen(global);
-    const theme = selectTheme(global);
-    const themeValues = selectThemeValues(global, theme);
 
     return {
       currentUserId,
+      hasCurrentUser: Boolean(selectUser(global, currentUserId!)),
       isLeftColumnOpen: isLeftColumnShown,
       isMiddleColumnOpen: Boolean(chatId),
       isRightColumnOpen: selectIsRightColumnShown(global, isMobile),
@@ -741,7 +752,6 @@ export default memo(withGlobal<OwnProps>(
       shouldSkipHistoryAnimations,
       openedStickerSetShortName,
       openedCustomEmojiSetIds,
-      isServiceChatReady: selectIsServiceChatReady(global),
       activeGroupCallId: isMasterTab ? global.groupCalls.activeGroupCallId : undefined,
       withInterfaceAnimations: selectCanAnimateInterface(global),
       wasTimeFormatSetManually,
@@ -775,11 +785,6 @@ export default memo(withGlobal<OwnProps>(
       isFoldersSidebarShown: foldersPosition === FOLDERS_POSITION_LEFT && !isMobile && selectAreFoldersPresent(global),
       diceEmojies: global.appConfig?.diceEmojies,
       selectedGiftAuction,
-      theme,
-      customBackground: themeValues?.background,
-      backgroundColor: themeValues?.backgroundColor,
-      patternColor: themeValues?.patternColor,
-      isBackgroundBlurred: themeValues?.isBlurred,
     };
   },
 )(Main));

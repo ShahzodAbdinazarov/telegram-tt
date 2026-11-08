@@ -33,10 +33,14 @@ import { buildApiUser, buildApiUserFullInfo } from '../apiBuilders/users';
 import {
   buildInputChannelFromLocalDb,
   buildInputPeerFromLocalDb,
+  buildInputUserFromLocalDb,
   DEFAULT_PRIMITIVES,
   getEntityTypeById,
 } from '../gramjsBuilders';
 import {
+  addDocumentToLocalDb,
+  addInlineBotRepairInfo,
+  addSavedMusicRepairInfo,
   addStoryToLocalDb, addUserToLocalDb,
   addWebPageMediaToLocalDb,
 } from '../helpers/localDb';
@@ -44,7 +48,7 @@ import {
   buildApiError,
   isResponseUpdate, log,
 } from '../helpers/misc';
-import localDb, { clearLocalDb, type RepairInfo } from '../localDb';
+import localDb, { clearLocalDb, type InlineBotRepairInfo, type RepairInfo } from '../localDb';
 import { sendApiUpdate } from '../updates/apiUpdateEmitter';
 import { processAndUpdateEntities, processMessageAndUpdateThreadInfo } from '../updates/entityProcessor';
 import {
@@ -85,6 +89,10 @@ const ABORT_CONTROLLERS = new Map<string, AbortController>();
 let client: TelegramClient;
 let currentUserId: string | undefined;
 
+export function setLanguageCode({ langCode }: { langCode: string }) {
+  return client.setLanguageCode(langCode);
+}
+
 export async function init(initialArgs: ApiInitialArgs, onConnected?: NoneToVoidFunction) {
   if (DEBUG) {
     // eslint-disable-next-line no-console
@@ -93,9 +101,9 @@ export async function init(initialArgs: ApiInitialArgs, onConnected?: NoneToVoid
 
   const {
     userAgent, platform, sessionData, isWebmSupported, maxBufferSize, webAuthToken, dcId,
-    mockScenario, shouldForceHttpTransport, shouldAllowHttpTransport,
+    shouldForceHttpTransport, shouldAllowHttpTransport,
     shouldDebugExportedSenders, langCode, isTestServerRequested, accountIds,
-    hasPasskeySupport,
+    hasPasskeySupport, webAuthUserId,
   } = initialArgs;
 
   const session = new sessions.CallbackSession(sessionData, onSessionUpdate);
@@ -122,7 +130,7 @@ export async function init(initialArgs: ApiInitialArgs, onConnected?: NoneToVoid
       langCode,
       systemLangCode: navigator.language,
       isTestServerRequested,
-    } as any,
+    },
   );
 
   client.addEventHandler(handleGramJsUpdate, gramJsUpdateEventBuilder);
@@ -149,8 +157,8 @@ export async function init(initialArgs: ApiInitialArgs, onConnected?: NoneToVoid
         initialMethod: platform === 'iOS' || platform === 'Android' ? 'phoneNumber' : 'qrCode',
         shouldThrowIfUnauthorized: Object.values(sessionData?.keys || {}).length > 0,
         webAuthToken,
+        webAuthUserId,
         webAuthTokenFailed: onWebAuthTokenFailed,
-        mockScenario,
         accountIds,
         hasPasskeySupport,
       }, onConnected);
@@ -308,7 +316,8 @@ export async function invokeRequest<T extends GramJs.AnyRequest>(
     processAndUpdateEntities(result);
 
     if (DEBUG) {
-      log('RESPONSE', request.className, result);
+      // The streaming URL carries a secret
+      log('RESPONSE', request.className, request instanceof GramJs.toncenter.GetStreamingUrl ? '[hidden]' : result);
     }
 
     if (!shouldIgnoreUpdates && isResponseUpdate(result)) {
@@ -550,9 +559,70 @@ export async function repairFileReference({
       const result = await repairWebPageMedia(localRepairInfo.url);
       return result;
     }
+
+    if (localRepairInfo.type === 'savedMusic') {
+      const result = await repairSavedMusicMedia(localRepairInfo.peerId, entityId);
+      return result;
+    }
+
+    if (localRepairInfo.type === 'inlineBot') {
+      const result = await repairInlineBotMedia(localRepairInfo, entityId);
+      return result;
+    }
   }
 
   return false;
+}
+
+async function repairSavedMusicMedia(peerId: string, documentId: string) {
+  const id = buildInputUserFromLocalDb(peerId);
+  const document = localDb.documents[documentId];
+  if (!id || !document) return false;
+
+  const result = await invokeRequest(new GramJs.users.GetSavedMusicByID({
+    id,
+    documents: [new GramJs.InputDocument({
+      id: document.id,
+      accessHash: document.accessHash,
+      fileReference: document.fileReference,
+    })],
+  }), {
+    shouldIgnoreErrors: true,
+  });
+
+  if (!(result instanceof GramJs.users.SavedMusic)) return false;
+
+  result.documents.forEach((doc) => {
+    addDocumentToLocalDb(addSavedMusicRepairInfo(doc, peerId));
+  });
+
+  return true;
+}
+
+async function repairInlineBotMedia(repairInfo: InlineBotRepairInfo, documentId: string) {
+  const bot = buildInputUserFromLocalDb(repairInfo.botId);
+  const peer = buildInputPeerFromLocalDb(repairInfo.peerId);
+  if (!bot || !peer) return false;
+
+  const result = await invokeRequest(new GramJs.messages.GetInlineBotResults({
+    bot,
+    peer,
+    query: repairInfo.query,
+    offset: repairInfo.offset ?? DEFAULT_PRIMITIVES.STRING,
+  }), {
+    shouldIgnoreErrors: true,
+  });
+  if (!result) return false;
+
+  let isRepaired = false;
+  result.results.forEach((item) => {
+    if (!(item instanceof GramJs.BotInlineMediaResult) || !(item.document instanceof GramJs.Document)) return;
+
+    addDocumentToLocalDb(addInlineBotRepairInfo(item.document, repairInfo));
+    if (String(item.document.id) === documentId) isRepaired = true;
+  });
+
+  return isRepaired;
 }
 
 async function repairMessageMedia(peerId: string, messageId: number) {
@@ -666,4 +736,10 @@ export function requestChannelDifference(channelId: string) {
 
 export function setOpenedChannelIds(channelIds: string[]) {
   setOpenedChannelIdsInUpdates(channelIds);
+}
+
+export function cancelWebTokenAuthorization({ token }: { token: string }): Promise<boolean | undefined> {
+  return invokeRequest(new GramJs.auth.CancelWebTokenAuthorization({ webAuthToken: token }), {
+    shouldIgnoreErrors: true,
+  });
 }

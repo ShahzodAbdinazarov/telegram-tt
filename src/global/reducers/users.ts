@@ -1,19 +1,22 @@
 import type {
+  ApiInputSavedStarGift,
   ApiMissingInvitedUser,
   ApiSavedStarGift,
   ApiStarGiftCollection,
   ApiUser,
   ApiUserCommonChats,
   ApiUserFullInfo,
+  ApiUserSavedMusic,
   ApiUserStatus,
 } from '../../api/types';
 import type { BotAppPermissions } from '../../types';
-import type { GlobalState, TabArgs, TabState } from '../types';
+import type { GlobalState, TabArgs } from '../types';
 
 import { areDeepEqual } from '../../util/areDeepEqual';
 import { getCurrentTabId } from '../../util/establishMultitabRole';
-import { omit, omitUndefined, unique } from '../../util/iteratees';
+import { mapValues, omit, omitUndefined, unique } from '../../util/iteratees';
 import { MEMO_EMPTY_ARRAY } from '../../util/memo';
+import { areInputSavedGiftsEqual } from '../helpers/payments';
 import { getSavedGiftKey } from '../helpers/stars';
 import { selectActiveGiftsCollectionId, selectTabState } from '../selectors';
 import { updateTabState } from './tabs';
@@ -33,19 +36,30 @@ function updateContactList<T extends GlobalState>(global: T, updatedUsers: ApiUs
 
   if (!contactUserIds) return global;
 
-  const contactUserIdsFromUpdate = updatedUsers
-    .filter((user) => user?.isContact)
-    .map((user) => user.id);
+  const addedContactUserIds: string[] = [];
+  const removedContactUserIds = new Set<string>();
 
-  if (contactUserIdsFromUpdate.length === 0) return global;
+  updatedUsers.forEach(({ id, isContact }) => {
+    if (isContact) {
+      addedContactUserIds.push(id);
+    } else {
+      removedContactUserIds.add(id);
+    }
+  });
+
+  if (!addedContactUserIds.length && !removedContactUserIds.size) return global;
+
+  const updatedContactUserIds = unique([
+    ...addedContactUserIds,
+    ...contactUserIds,
+  ]).filter((id) => !removedContactUserIds.has(id));
+
+  if (areDeepEqual(contactUserIds, updatedContactUserIds)) return global;
 
   return {
     ...global,
     contactList: {
-      userIds: unique([
-        ...contactUserIdsFromUpdate,
-        ...contactUserIds,
-      ]),
+      userIds: updatedContactUserIds,
     },
   };
 }
@@ -58,7 +72,9 @@ export function updateUser<T extends GlobalState>(global: T, userId: string, use
     return global;
   }
 
-  global = updateContactList(global, [updatedUser]);
+  if ('isContact' in userUpdate) {
+    global = updateContactList(global, [updatedUser]);
+  }
 
   return replaceUsers(global, {
     ...byId,
@@ -138,10 +154,10 @@ function getUpdatedUser(global: GlobalState, userId: string, userUpdate: Partial
     omitProps.push('usernames');
   }
 
-  const updatedUser = {
+  const updatedUser: ApiUser = {
     ...user,
     ...omit(userUpdate, omitProps),
-  } as ApiUser;
+  };
 
   if (!updatedUser.id || !updatedUser.type) {
     return undefined;
@@ -183,28 +199,6 @@ export function deleteContact<T extends GlobalState>(global: T, userId: string):
   return updateUserFullInfo(global, userId, {
     settings: undefined,
   });
-}
-
-export function updateUserSearch<T extends GlobalState>(
-  global: T,
-  searchStatePartial: Partial<TabState['userSearch']>,
-  ...[tabId = getCurrentTabId()]: TabArgs<T>
-): T {
-  return updateTabState(global, {
-    userSearch: {
-      ...selectTabState(global, tabId).userSearch,
-      ...searchStatePartial,
-    },
-  }, tabId);
-}
-
-export function updateUserSearchFetchingStatus<T extends GlobalState>(
-  global: T, newState: boolean,
-  ...[tabId = getCurrentTabId()]: TabArgs<T>
-): T {
-  return updateUserSearch(global, {
-    fetchingStatus: newState,
-  }, tabId);
 }
 
 export function updateUserBlockedState<T extends GlobalState>(global: T, userId: string, isBlocked: boolean): T {
@@ -257,6 +251,21 @@ export function updateUserCommonChats<T extends GlobalState>(
       commonChatsById: {
         ...global.users.commonChatsById,
         [userId]: commonChats,
+      },
+    },
+  };
+}
+
+export function updateUserSavedMusic<T extends GlobalState>(
+  global: T, userId: string, savedMusic: ApiUserSavedMusic,
+): T {
+  return {
+    ...global,
+    users: {
+      ...global.users,
+      savedMusicByPeerId: {
+        ...global.users.savedMusicByPeerId,
+        [userId]: savedMusic,
       },
     },
   };
@@ -359,6 +368,33 @@ export function replacePeerSavedGifts<T extends GlobalState>(
             nextOffset,
           },
         },
+      },
+    },
+  }, tabId);
+}
+
+export function removePeerSavedGift<T extends GlobalState>(
+  global: T,
+  peerId: string,
+  inputGift: ApiInputSavedStarGift,
+  ...[tabId = getCurrentTabId()]: TabArgs<T>
+): T {
+  const tabState = selectTabState(global, tabId);
+  const collections = tabState.savedGifts.collectionsByPeerId[peerId];
+  if (!collections) return global;
+
+  // `mapValues` widens numeric collection ids to string keys
+  const updatedCollections = mapValues(collections, ({ gifts, nextOffset }) => ({
+    gifts: gifts.filter((gift) => !gift.inputGift || !areInputSavedGiftsEqual(gift.inputGift, inputGift)),
+    nextOffset,
+  })) as typeof collections;
+
+  return updateTabState(global, {
+    savedGifts: {
+      ...tabState.savedGifts,
+      collectionsByPeerId: {
+        ...tabState.savedGifts.collectionsByPeerId,
+        [peerId]: updatedCollections,
       },
     },
   }, tabId);

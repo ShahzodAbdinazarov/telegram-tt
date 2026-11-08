@@ -1,8 +1,6 @@
-import type React from '../../lib/teact/teact';
-
 import buildClassName from '../../util/buildClassName';
 
-import useOldLang from '../../hooks/useOldLang';
+import useLang from '../../hooks/useLang';
 
 import styles from './Separator.module.scss';
 
@@ -12,7 +10,7 @@ type OwnProps = {
 };
 
 function Separator({ children, className }: OwnProps) {
-  const lang = useOldLang();
+  const lang = useLang();
 
   return (
     <div

@@ -25,7 +25,7 @@ export default defineConfig(
     quoteProps: 'as-needed',
   }),
   globalIgnores([
-    'src/lib/rlottie/**',
+    '.cache/',
     'src/lib/video-preview/polyfill',
     'src/lib/fasttextweb/**',
     'src/lib/gramjs/tl/',
@@ -201,12 +201,17 @@ export default defineConfig(
       '@eslint-react/no-use-context': 'off',
       '@eslint-react/no-context-provider': 'off',
       '@eslint-react/no-array-index-key': 'off',
-      '@eslint-react/web-api/no-leaked-timeout': 'off',
+      '@eslint-react/static-components': 'off',
+      '@eslint-react/web-api-no-leaked-event-listener': 'off',
+      '@eslint-react/web-api-no-leaked-fetch': 'off',
+      '@eslint-react/web-api-no-leaked-intersection-observer': 'off',
+      '@eslint-react/web-api-no-leaked-interval': 'off',
+      '@eslint-react/web-api-no-leaked-resize-observer': 'off',
+      '@eslint-react/web-api-no-leaked-timeout': 'off',
       '@eslint-react/no-missing-key': 'off',
       '@eslint-react/no-nested-component-definitions': 'off',
       '@eslint-react/no-unused-props': 'off',
       '@eslint-react/dom-no-unsafe-iframe-sandbox': 'off',
-      '@eslint-react/dom/no-unsafe-iframe-sandbox': 'off',
       '@eslint-react/no-leaked-conditional-rendering': 'error',
     },
     plugins: {
@@ -221,6 +226,22 @@ export default defineConfig(
         project: ['./tsconfig.json', './tsconfig.script.json'],
         tsconfigRootDir: import.meta.dirname,
       },
+    },
+  },
+  {
+    name: 'global-state-json',
+    // Global state may hold `bigint`: plain `JSON.stringify` throws on it, and plain `JSON.parse` cannot restore it
+    files: ['src/global/cache.ts', 'src/global/actions/api/passcode.ts', 'src/util/init.ts'],
+    rules: {
+      'no-restricted-properties': ['error', {
+        object: 'JSON',
+        property: 'parse',
+        message: 'Use `parseJsonWithBigInt` from `src/util/numbers.ts` for global state.',
+      }, {
+        object: 'JSON',
+        property: 'stringify',
+        message: 'Use `stringifyJsonWithBigInt` from `src/util/numbers.ts` for global state.',
+      }],
     },
   },
 );

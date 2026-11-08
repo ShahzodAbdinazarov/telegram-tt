@@ -1,9 +1,11 @@
-import type { FC } from '@teact';
-import { memo, useRef, useState } from '@teact';
+import {
+  memo, useRef, useSignal, useState,
+} from '@teact';
 import { getActions, getGlobal } from '../../../global';
 
 import type { FolderEditDispatch, FoldersState } from '../../../hooks/reducers/useFoldersReducer';
-import type { AnimationLevel } from '../../../types';
+import type { AnimationLevel, SettingsHighlight } from '../../../types';
+import type { SettingsSearchItem } from './search/searchSettings';
 import { SettingsScreens } from '../../../types';
 
 import { selectTabState } from '../../../global/selectors';
@@ -12,13 +14,17 @@ import { resolveTransitionName } from '../../../util/resolveTransitionName';
 import useTwoFaReducer from '../../../hooks/reducers/useTwoFaReducer';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useScrollNotch from '../../../hooks/useScrollNotch';
+import useSyncEffect from '../../../hooks/useSyncEffect';
+import useSettingsHighlight from './hooks/useSettingsHighlight';
 
 import Transition from '../../ui/Transition';
 import SettingsFolders from './folders/SettingsFolders';
 import SettingsPasscode from './passcode/SettingsPasscode';
 import PrivacyMessages from './PrivacyMessages';
+import SettingsSearch from './search/SettingsSearch';
 import SettingsActiveSessions from './SettingsActiveSessions';
 import SettingsActiveWebsites from './SettingsActiveWebsites';
+import SettingsAutoDeleteMessages from './SettingsAutoDeleteMessages';
 import SettingsCustomEmoji from './SettingsCustomEmoji';
 import SettingsDataStorage from './SettingsDataStorage';
 import SettingsDoNotTranslate from './SettingsDoNotTranslate';
@@ -84,6 +90,7 @@ const FOLDERS_SCREENS = [
 ];
 
 const PRIVACY_SCREENS = [
+  SettingsScreens.AutoDeleteMessages,
   SettingsScreens.PrivacyBlockedUsers,
   SettingsScreens.ActiveWebsites,
   SettingsScreens.Passkeys,
@@ -119,6 +126,11 @@ const PRIVACY_GIFTS_SCREENS = [
   SettingsScreens.PrivacyGiftsDeniedContacts,
 ];
 
+const PRIVACY_SAVED_MUSIC_SCREENS = [
+  SettingsScreens.PrivacySavedMusicAllowedContacts,
+  SettingsScreens.PrivacySavedMusicDeniedContacts,
+];
+
 const PRIVACY_PHONE_CALL_SCREENS = [
   SettingsScreens.PrivacyPhoneCallAllowedContacts,
   SettingsScreens.PrivacyPhoneCallDeniedContacts,
@@ -151,27 +163,45 @@ const PRIVACY_MESSAGES_SCREENS = [
 export type OwnProps = {
   isActive: boolean;
   currentScreen: SettingsScreens;
+  highlight?: SettingsHighlight;
   foldersState: FoldersState;
   foldersDispatch: FolderEditDispatch;
   animationLevel: AnimationLevel;
   shouldSkipTransition?: boolean;
   hasProfileBackground?: boolean;
+  searchSessionId: number;
   onReset: (forceReturnToChatList?: true | Event) => void;
 };
 
-const Settings: FC<OwnProps> = ({
+const Settings = ({
   isActive,
   currentScreen,
+  highlight,
   foldersState,
   foldersDispatch,
   onReset,
   animationLevel,
   shouldSkipTransition,
   hasProfileBackground,
-}) => {
-  const { closeShareChatFolderModal, openSettingsScreen } = getActions();
+  searchSessionId,
+}: OwnProps) => {
+  const {
+    closeShareChatFolderModal,
+    openSettingsScreen,
+    addRecentlyFoundSettingId,
+    loadNestedSettingsData,
+    clearSettingsHighlight,
+  } = getActions();
 
   const containerRef = useRef<HTMLDivElement>();
+
+  const [getSearchQuery, setSearchQuery] = useSignal('');
+
+  useSyncEffect(() => {
+    setSearchQuery('');
+  }, [searchSessionId, setSearchQuery]);
+
+  useSettingsHighlight(containerRef, highlight);
 
   const [twoFaState, twoFaDispatch] = useTwoFaReducer();
   const [privacyPasscode, setPrivacyPasscode] = useState<string>('');
@@ -220,6 +250,18 @@ const Settings: FC<OwnProps> = ({
     onReset();
   });
 
+  const handleSearchOpen = useLastCallback(() => {
+    loadNestedSettingsData();
+    openSettingsScreen({ screen: SettingsScreens.Search });
+  });
+
+  const handleSearchResultSelect = useLastCallback((item: SettingsSearchItem) => {
+    if (currentScreen !== SettingsScreens.Search) return;
+
+    addRecentlyFoundSettingId({ id: item.id });
+    openSettingsScreen({ screen: item.screen, highlight: item.highlight });
+  });
+
   function renderCurrentSectionContent(isScreenActive: boolean, activeScreen: SettingsScreens) {
     const privacyAllowScreens: Record<number, boolean> = {
       [SettingsScreens.PrivacyPhoneNumber]: PRIVACY_PHONE_NUMBER_SCREENS.includes(activeScreen),
@@ -228,6 +270,7 @@ const Settings: FC<OwnProps> = ({
       [SettingsScreens.PrivacyBio]: PRIVACY_BIO_SCREENS.includes(activeScreen),
       [SettingsScreens.PrivacyBirthday]: PRIVACY_BIRTHDAY_SCREENS.includes(activeScreen),
       [SettingsScreens.PrivacyGifts]: PRIVACY_GIFTS_SCREENS.includes(activeScreen),
+      [SettingsScreens.PrivacySavedMusic]: PRIVACY_SAVED_MUSIC_SCREENS.includes(activeScreen),
       [SettingsScreens.PrivacyPhoneCall]: PRIVACY_PHONE_CALL_SCREENS.includes(activeScreen),
       [SettingsScreens.PrivacyPhoneP2P]: PRIVACY_PHONE_P2P_SCREENS.includes(activeScreen),
       [SettingsScreens.PrivacyForwarding]: PRIVACY_FORWARDING_SCREENS.includes(activeScreen),
@@ -249,6 +292,16 @@ const Settings: FC<OwnProps> = ({
       case SettingsScreens.Main:
         return (
           <SettingsMain isActive={isActive} onReset={handleReset} />
+        );
+      case SettingsScreens.Search:
+        return (
+          <SettingsSearch
+            key={searchSessionId}
+            isActive={isScreenActive}
+            getQuery={getSearchQuery}
+            onSelect={handleSearchResultSelect}
+            onReset={handleReset}
+          />
         );
       case SettingsScreens.EditProfile:
         return (
@@ -289,6 +342,13 @@ const Settings: FC<OwnProps> = ({
         return (
           <SettingsPrivacy
             isActive={isScreenActive || isPrivacyScreen}
+            onReset={handleReset}
+          />
+        );
+      case SettingsScreens.AutoDeleteMessages:
+        return (
+          <SettingsAutoDeleteMessages
+            isActive={isScreenActive}
             onReset={handleReset}
           />
         );
@@ -352,6 +412,7 @@ const Settings: FC<OwnProps> = ({
       case SettingsScreens.PrivacyBio:
       case SettingsScreens.PrivacyBirthday:
       case SettingsScreens.PrivacyGifts:
+      case SettingsScreens.PrivacySavedMusic:
       case SettingsScreens.PrivacyPhoneCall:
       case SettingsScreens.PrivacyForwarding:
       case SettingsScreens.PrivacyVoiceMessages:
@@ -370,6 +431,7 @@ const Settings: FC<OwnProps> = ({
       case SettingsScreens.PrivacyBioAllowedContacts:
       case SettingsScreens.PrivacyBirthdayAllowedContacts:
       case SettingsScreens.PrivacyGiftsAllowedContacts:
+      case SettingsScreens.PrivacySavedMusicAllowedContacts:
       case SettingsScreens.PrivacyPhoneCallAllowedContacts:
       case SettingsScreens.PrivacyPhoneP2PAllowedContacts:
       case SettingsScreens.PrivacyForwardingAllowedContacts:
@@ -394,6 +456,7 @@ const Settings: FC<OwnProps> = ({
       case SettingsScreens.PrivacyBioDeniedContacts:
       case SettingsScreens.PrivacyBirthdayDeniedContacts:
       case SettingsScreens.PrivacyGiftsDeniedContacts:
+      case SettingsScreens.PrivacySavedMusicDeniedContacts:
       case SettingsScreens.PrivacyPhoneCallDeniedContacts:
       case SettingsScreens.PrivacyPhoneP2PDeniedContacts:
       case SettingsScreens.PrivacyForwardingDeniedContacts:
@@ -469,6 +532,8 @@ const Settings: FC<OwnProps> = ({
       case SettingsScreens.PasscodeChangePasscodeCurrent:
       case SettingsScreens.PasscodeChangePasscodeNew:
       case SettingsScreens.PasscodeChangePasscodeConfirm:
+      case SettingsScreens.PasscodePasskeyAddConfirm:
+      case SettingsScreens.PasscodePasskeyRemoveConfirm:
       case SettingsScreens.PasscodeCongratulations:
       case SettingsScreens.PasscodeEnabled:
       case SettingsScreens.PasscodeTurnOff:
@@ -517,6 +582,12 @@ const Settings: FC<OwnProps> = ({
           onReset={handleReset}
           editedFolderId={foldersState.folderId}
           hasProfileBackground={hasProfileBackground}
+          isMenuForcedOpen={highlight?.isInHeaderMenu}
+          searchSessionId={searchSessionId}
+          getSearchQuery={getSearchQuery}
+          onSearchOpen={handleSearchOpen}
+          onSearchQueryChange={setSearchQuery}
+          onMenuClose={clearSettingsHighlight}
         />
         {renderCurrentSectionContent(isScreenActive, activeKey)}
       </>

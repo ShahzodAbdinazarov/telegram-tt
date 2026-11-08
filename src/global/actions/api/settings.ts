@@ -1,6 +1,7 @@
-import type { ApiPrivacySettings, ApiUsername } from '../../../api/types';
+import type { ApiError, ApiPrivacySettings, ApiUsername } from '../../../api/types';
 import type { ActionReturnType } from '../../types';
 import {
+  LeftColumnContent,
   ProfileEditProgress,
   SettingsScreens,
   UPLOADING_WALLPAPER_SLUG,
@@ -9,33 +10,40 @@ import {
 import {
   APP_CONFIG_REFETCH_INTERVAL,
   COUNTRIES_WITH_12H_TIME_FORMAT,
+  LANG_PACK,
   MUTE_INDEFINITE_TIMESTAMP,
   UNMUTE_TIMESTAMP,
 } from '../../../config';
-import { toCredentialCreationOptions } from '../../../util/browser/passkeys';
+import { signalUnknownPasskey, toCredentialCreationOptions } from '../../../util/browser/passkeys';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { buildCollectionByKey } from '../../../util/iteratees';
+import { changeLanguage, getTranslationFn } from '../../../util/localization';
 import { requestPermission, subscribe, unsubscribe } from '../../../util/notifications';
 import requestActionTimeout from '../../../util/requestActionTimeout';
 import { getServerTime } from '../../../util/serverTime';
+import { resolveSettingsLink } from '../../../util/settingsLinks';
 import { callApi } from '../../../api/gramjs';
 import { buildApiInputPrivacyRules } from '../../helpers';
 import { addActionHandler, getGlobal, getPromiseActions, setGlobal } from '../../index';
 import {
   addBlockedUser, addNotifyExceptions, deletePeerPhoto,
-  removeBlockedUser, replaceSettings, updateChat,
+  removeBlockedUser, replacePersonalChannelIds, replaceSettings, updateChat,
   updateNotifyDefaults, updateSharedSettings, updateUser, updateUserFullInfo,
 } from '../../reducers';
 import { updateTabState } from '../../reducers/tabs';
 import {
   selectChat, selectIsCurrentUserFrozen,
+  selectLanguageCode,
   selectTabState, selectUser,
 } from '../../selectors';
 import { selectSharedSettings } from '../../selectors/sharedState';
 
+let languageSelectionRequestId = 0;
+let languageModalRequestId = 0;
+
 addActionHandler('updateProfile', async (global, actions, payload): Promise<void> => {
   const {
-    photo, firstName, lastName, bio: about, username,
+    photo, firstName, lastName, bio: about, username, personalChannelId,
     tabId = getCurrentTabId(),
   } = payload;
 
@@ -91,6 +99,23 @@ addActionHandler('updateProfile', async (global, actions, payload): Promise<void
     }
   }
 
+  let isPersonalChannelUpdated = false;
+  if (personalChannelId !== undefined) {
+    global = getGlobal();
+    const personalChannel = personalChannelId ? selectChat(global, personalChannelId)! : undefined;
+    const result = await callApi('updatePersonalChannel', personalChannel);
+    if (result) {
+      global = getGlobal();
+      global = updateUserFullInfo(global, currentUserId, {
+        personalChannelId: personalChannelId || undefined,
+        personalChannelMessageId: undefined,
+      });
+      setGlobal(global);
+
+      isPersonalChannelUpdated = true;
+    }
+  }
+
   global = getGlobal();
   global = updateTabState(global, {
     profileEdit: {
@@ -99,9 +124,18 @@ addActionHandler('updateProfile', async (global, actions, payload): Promise<void
   }, tabId);
   setGlobal(global);
 
-  if (photo) {
-    actions.loadFullUser({ userId: currentUserId, withPhotos: true });
+  if (photo || isPersonalChannelUpdated) {
+    actions.loadFullUser({ userId: currentUserId, withPhotos: photo ? true : undefined });
   }
+});
+
+addActionHandler('loadPersonalChannels', async (global): Promise<void> => {
+  const personalChannelIds = await callApi('fetchAdminedPersonalChannelIds');
+  if (!personalChannelIds) return;
+
+  global = getGlobal();
+  global = replacePersonalChannelIds(global, personalChannelIds);
+  setGlobal(global);
 });
 
 addActionHandler('updateBirthday', async (global, actions, payload): Promise<void> => {
@@ -237,7 +271,7 @@ addActionHandler('uploadWallpaper', async (global, actions, payload): Promise<vo
   }
 
   const firstWallpaper = global.settings.loadedWallpapers[0];
-  if (!firstWallpaper || firstWallpaper.slug !== UPLOADING_WALLPAPER_SLUG) {
+  if (!firstWallpaper || firstWallpaper.slug !== UPLOADING_WALLPAPER_SLUG || !wallpaper.document) {
     return;
   }
 
@@ -407,6 +441,65 @@ addActionHandler('loadLanguages', async (global): Promise<void> => {
   setGlobal(global);
 });
 
+addActionHandler('openLanguageModal', async (global, actions, payload): Promise<void> => {
+  const { langCode, tabId = getCurrentTabId() } = payload;
+  const requestId = ++languageModalRequestId;
+  const modal = { langCode, isLoading: true, requestId };
+  global = updateTabState(global, { languageModal: modal }, tabId);
+  setGlobal(global);
+
+  let language;
+  let error: 'unsupported' | 'failed' | undefined;
+  try {
+    language = await callApi('fetchLanguage', { langPack: LANG_PACK, langCode });
+    if (!language) error = 'failed';
+  } catch (err) {
+    error = ['LANG_CODE_NOT_SUPPORTED', 'LANG_CODE_INVALID'].includes((err as ApiError).message)
+      ? 'unsupported' : 'failed';
+  }
+
+  global = getGlobal();
+  if (selectTabState(global, tabId).languageModal?.requestId !== requestId) return;
+  global = updateTabState(global, { languageModal: { requestId, langCode, language, error } }, tabId);
+  setGlobal(global);
+});
+
+addActionHandler('applyLanguage', async (global, actions, payload): Promise<void> => {
+  const { language, tabId = getCurrentTabId() } = payload;
+  if (language.stringsCount === 0) return;
+  const requestId = ++languageSelectionRequestId;
+
+  const modal = selectTabState(global, tabId).languageModal;
+  const applyingModal = modal?.language?.langCode === language.langCode
+    ? { ...modal, isApplying: true } : undefined;
+  if (applyingModal) {
+    global = updateTabState(global, { languageModal: applyingModal }, tabId);
+    setGlobal(global);
+  }
+
+  const hasChanged = await changeLanguage(language);
+  global = getGlobal();
+  if (hasChanged && getTranslationFn().rawCode === language.langCode) {
+    const settings = selectSharedSettings(global);
+    const appliedLanguage = getTranslationFn().languageInfo!;
+    global = updateSharedSettings(global, {
+      language: language.langCode,
+      customLanguages: !language.isOfficial
+        ? [appliedLanguage, ...settings.customLanguages?.filter(({ langCode }) => langCode !== language.langCode) || []]
+        : settings.customLanguages,
+    });
+  } else if (requestId === languageSelectionRequestId) {
+    actions.showNotification({ message: { key: 'LanguageLoadFailed' }, tabId });
+  }
+
+  if (applyingModal && selectTabState(global, tabId).languageModal?.requestId === applyingModal.requestId) {
+    global = updateTabState(global, {
+      languageModal: hasChanged ? undefined : { ...applyingModal, isApplying: undefined },
+    }, tabId);
+  }
+  setGlobal(global);
+});
+
 addActionHandler('loadPrivacySettings', async (global, actions, payload): Promise<void> => {
   const { skipIfCached } = payload;
   if (skipIfCached && Object.keys(global.settings.privacy).length > 0) {
@@ -429,6 +522,7 @@ addActionHandler('loadPrivacySettings', async (global, actions, payload): Promis
     callApi('fetchPrivacySettings', 'birthday'),
     callApi('fetchPrivacySettings', 'gifts'),
     callApi('fetchPrivacySettings', 'noPaidMessages'),
+    callApi('fetchPrivacySettings', 'savedMusic'),
   ]);
 
   if (result.some((e) => e === undefined)) {
@@ -449,6 +543,7 @@ addActionHandler('loadPrivacySettings', async (global, actions, payload): Promis
     birthdaySettings,
     giftsSettings,
     noPaidMessagesSettings,
+    savedMusicSettings,
   ] = result as {
     rules: ApiPrivacySettings;
   }[];
@@ -473,6 +568,7 @@ addActionHandler('loadPrivacySettings', async (global, actions, payload): Promis
         birthday: birthdaySettings.rules,
         gifts: giftsSettings.rules,
         noPaidMessages: noPaidMessagesSettings.rules,
+        savedMusic: savedMusicSettings.rules,
       },
     },
   };
@@ -623,7 +719,7 @@ addActionHandler('updateContentSettings', async (global, actions, payload): Prom
 
 addActionHandler('loadCountryList', async (global, actions, payload): Promise<void> => {
   let { langCode } = payload;
-  if (!langCode) langCode = selectSharedSettings(global).language;
+  if (!langCode) langCode = selectLanguageCode(global);
 
   const countryList = await callApi('fetchCountryList', { langCode });
   if (!countryList) return;
@@ -769,6 +865,25 @@ addActionHandler('loadGlobalPrivacySettings', async (global): Promise<void> => {
 
   global = getGlobal();
   global = replaceSettings(global, { ...globalSettings });
+  setGlobal(global);
+});
+
+addActionHandler('loadDefaultHistoryTtl', async (global): Promise<void> => {
+  const defaultHistoryTtl = await callApi('fetchDefaultHistoryTtl');
+  if (defaultHistoryTtl === undefined) return;
+
+  global = getGlobal();
+  global = replaceSettings(global, { defaultHistoryTtl });
+  setGlobal(global);
+});
+
+addActionHandler('setDefaultHistoryTtl', async (global, _actions, payload): Promise<void> => {
+  const { period } = payload;
+  const result = await callApi('setDefaultHistoryTtl', { period });
+  if (!result) return;
+
+  global = getGlobal();
+  global = replaceSettings(global, { defaultHistoryTtl: period });
   setGlobal(global);
 });
 
@@ -1017,7 +1132,48 @@ addActionHandler('deletePasskey', async (global, actions, payload): Promise<void
     setGlobal(global);
   }
 
-  await callApi('deletePasskey', { id });
+  const isDeleted = await callApi('deletePasskey', { id });
+  if (isDeleted) signalUnknownPasskey(id);
 
   actions.loadPasskeys();
+});
+
+addActionHandler('loadNestedSettingsData', async (global): Promise<void> => {
+  const {
+    loadPasswordInfo, loadBlockedUsers, loadWebAuthorizations, loadPasskeys, loadDefaultHistoryTtl,
+    loadGlobalPrivacySettings,
+  } = getPromiseActions();
+
+  const requests = [loadPasswordInfo()];
+  if (!selectIsCurrentUserFrozen(global)) {
+    requests.push(
+      loadBlockedUsers(), loadWebAuthorizations(), loadPasskeys(), loadDefaultHistoryTtl(),
+      loadGlobalPrivacySettings(),
+    );
+  }
+
+  await Promise.all(requests);
+});
+
+addActionHandler('openSettingsLink', async (global, actions, payload): Promise<void> => {
+  const { path, tabId = getCurrentTabId() } = payload;
+
+  const target = resolveSettingsLink(global, path);
+  const openedScreen = target ? target.screen : selectTabState(global, tabId).leftColumn.settingsScreen;
+  if (target) {
+    actions.openSettingsScreen({ ...target, tabId });
+  } else {
+    actions.openLeftColumnContent({ contentKey: LeftColumnContent.Settings, tabId });
+  }
+
+  await getPromiseActions().loadNestedSettingsData();
+
+  global = getGlobal();
+  const { contentKey, settingsScreen } = selectTabState(global, tabId).leftColumn;
+  if (contentKey !== LeftColumnContent.Settings || settingsScreen !== openedScreen) return;
+
+  const loadedTarget = resolveSettingsLink(global, path);
+  if (!loadedTarget || loadedTarget.screen === openedScreen) return;
+
+  actions.openSettingsScreen({ ...loadedTarget, tabId });
 });

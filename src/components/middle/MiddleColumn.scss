@@ -17,7 +17,7 @@
   }
 
   .messages-layout {
-    --slide-transition: 450ms cubic-bezier(0.25, 1, 0.5, 1);
+    --slide-transition: var(--top-stack-transition);
 
     position: relative;
 
@@ -71,15 +71,22 @@
     }
 
     > .Button {
-      transform: scale(1);
-      opacity: 1;
-      /* stylelint-disable plugin/no-low-performance-animation-properties */
-      transition:
+      --composer-button-transition:
         border-radius 0.15s,
         opacity var(--select-transition),
         transform var(--select-transition),
         background-color 0.15s,
         color 0.15s;
+
+      transform: scale(1);
+      opacity: 1;
+      transition: var(--composer-button-transition);
+
+      // The paid "Send Stars" pill animates its width (see `main-button.paid` in `Composer.scss`)
+      &.main-button {
+        /* stylelint-disable-next-line plugin/no-low-performance-animation-properties */
+        transition: var(--composer-button-transition), width 0.25s ease-out;
+      }
 
       body.no-message-composer-animations & {
         transition: none !important;
@@ -97,7 +104,6 @@
       }
 
       .composer-wrapper {
-        transform: scaleX(var(--composer-hidden-scale, 1)) translateX(var(--composer-translate-x, 0));
         border-bottom-right-radius: var(--border-radius-messages);
 
         &::before {
@@ -121,18 +127,35 @@
     }
   }
 
-  .messaging-disabled {
-    transform: scaleX(1);
-    transition: transform var(--select-transition);
+  .Composer.is-chat-composer {
+    transform: scaleX(1) translateX(0);
+    transition: transform var(--select-transition), opacity var(--select-transition);
 
-    .messaging-disabled-inner span {
-      opacity: 1;
-      transition: opacity var(--select-transition);
+    body.no-message-composer-animations & {
+      transition: none !important;
+    }
 
-      body.no-page-transitions & {
-        transition: none !important;
+    .composer-wrapper {
+      transform: none;
+      transition: none;
+    }
+
+    &:not(.shown) {
+      transform: none;
+      opacity: 0;
+
+      .composer-wrapper {
+        transform: none;
+      }
+
+      > .Button {
+        transform: none;
       }
     }
+  }
+
+  .messaging-disabled {
+    transition: opacity var(--select-transition);
 
     body.no-page-transitions & {
       transition: none !important;
@@ -140,17 +163,13 @@
 
     &:not(.shown) {
       pointer-events: none;
-      transform: scaleX(var(--composer-hidden-scale, 1));
-
-      .messaging-disabled-inner span {
-        opacity: 0;
-      }
+      opacity: 0;
     }
 
     &-inner {
       width: 100%;
-      padding: 1rem;
-      border-radius: var(--border-radius-messages);
+      padding: 0.75rem;
+      border-radius: 2.5rem;
 
       color: var(--color-text-secondary);
       text-align: center;
@@ -161,7 +180,8 @@
   }
 
   .middle-column-footer {
-    --base-height: 3rem;
+    --base-height: var(--composer-height);
+    --footer-side-inset: 1rem;
 
     position: absolute;
     z-index: var(--z-middle-footer);
@@ -175,10 +195,12 @@
 
     width: 100%;
     max-width: var(--messages-container-width);
+    height: calc-size(auto, size);
     margin: 0 auto;
-    padding: 0 1rem;
+    padding: 0 var(--footer-side-inset);
 
-    transition: transform var(--layer-transition);
+    /* stylelint-disable-next-line plugin/no-low-performance-animation-properties */
+    transition: height var(--layer-transition), transform var(--layer-transition);
 
     body.no-page-transitions & {
       transition: none !important;
@@ -209,7 +231,7 @@
     }
 
     @media (max-width: 600px) {
-      padding: 0 0.5rem;
+      --footer-side-inset: 0.5rem;
 
       body.is-symbol-menu-open & {
         transform: translate3d(0, calc(-1 * (var(--symbol-menu-height))), 0);
@@ -224,18 +246,15 @@
 
 /* Common styles for message list fade-out shadow */
 .Composer,
-.MessageSelectToolbar,
 .messaging-disabled {
-  margin-bottom: 1.25rem;
+  margin-bottom: var(--composer-bottom-gap);
 
   @media (max-width: 600px) {
-    margin-bottom: 0.5rem;
+    margin-bottom: var(--composer-bottom-gap-mobile);
   }
 }
 
 .Composer,
-.MessageSelectToolbar,
-.composer-button,
 .messaging-disabled {
   position: relative;
   display: flex;
@@ -243,10 +262,9 @@
   width: 100%;
 }
 
-.MessageSelectToolbar-inner,
-.composer-button {
+.MessageSelectToolbar-inner {
   .mask-image-disabled & {
-    border-radius: var(--border-radius-messages);
+    border-radius: var(--composer-pill-radius);
     box-shadow: var(--shadow-footer);
   }
 }
@@ -254,54 +272,6 @@
 .messaging-disabled {
   .mask-image-disabled & {
     border-radius: var(--border-radius-messages);
-  }
-}
-
-.middle-column-footer-button-container {
-  position: absolute;
-
-  display: flex;
-  justify-content: center;
-
-  width: 100%;
-  padding-bottom: 1.25rem;
-
-  .unpin-all-button {
-    --button-text-color: var(--color-primary);
-
-    .icon-unpin {
-      margin-inline-start: -0.4375rem;
-      margin-inline-end: 0.75rem;
-
-      font-size: 1.5rem;
-      color: var(--color-text-secondary);
-
-      transition: color 0.15s;
-    }
-  }
-
-  .composer-button {
-    transform: scaleX(1);
-    height: var(--base-height);
-    transition: transform var(--select-transition), background-color 0.15s, color 0.15s;
-
-    .select-mode-active + .middle-column-footer & {
-      transform: scaleX(var(--unpin-hidden-scale));
-      box-shadow: none;
-    }
-  }
-
-  .open-chat-button {
-    --button-text-color: var(--color-primary);
-  }
-
-  .mask-image-disabled &::before {
-    background: unset;
-  }
-
-  @media (max-width: 600px) {
-    margin-left: -0.5rem;
-    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
   }
 }
 

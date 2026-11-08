@@ -18,6 +18,7 @@ import {
   type ApiPeerNotifySettings,
   type ApiPhoto,
   type ApiProfileTab,
+  type ApiThemeParameters,
   type ApiThreadInfo,
   type ApiUser,
   type ApiUserStatus,
@@ -30,6 +31,7 @@ import {
   DEBUG,
   MEMBERS_LOAD_SLICE,
   SERVICE_NOTIFICATIONS_USER_ID,
+  WEB_APP_PLATFORM,
 } from '../../../config';
 import { buildCollectionByKey, omitUndefined } from '../../../util/iteratees';
 import { GLOBAL_SEARCH_CONTACTS_LIMIT } from '../../../limits';
@@ -74,7 +76,9 @@ import {
   buildInputPhoto,
   buildInputProfileTab,
   buildInputReplyTo,
+  buildInputRichMessage,
   buildInputSuggestedPost,
+  buildInputThemeParams,
   buildInputUser,
   buildMtpMessageEntity,
   DEFAULT_PRIMITIVES,
@@ -91,7 +95,7 @@ import { sendApiUpdate } from '../updates/apiUpdateEmitter';
 import {
   applyState, updateChannelState,
 } from '../updates/updateManager';
-import { handleGramJsUpdate, invokeRequest, uploadFile } from './client';
+import { dispatchErrorUpdate, handleGramJsUpdate, invokeRequest, uploadFile } from './client';
 import { getPassword } from './twoFaSettings';
 
 type FullChatData = {
@@ -119,6 +123,7 @@ type ChatListData = {
   nextOffsetId?: number;
   nextOffsetPeerId?: string;
   nextOffsetDate?: number;
+  isFullyLoaded?: true;
 };
 
 export async function fetchChats({
@@ -180,6 +185,37 @@ export async function fetchChats({
   const lastMessageByChatId: Record<string, number> = {};
 
   dialogs.forEach((dialog) => {
+    if (dialog instanceof GramJs.DialogCommunity) {
+      // Communities live in the active list only
+      if (archived) {
+        return;
+      }
+
+      const communityEntity = peersByKey[`chat${dialog.communityId.toString()}`];
+      const community = communityEntity && buildApiChatFromPreview(communityEntity);
+      if (!community) {
+        return;
+      }
+
+      community.isListed = true;
+      chats.push(community);
+
+      const communityNotifySettings = buildApiPeerNotifySettings(dialog.notifySettings);
+      if (Object.values(omitUndefined(communityNotifySettings)).length) {
+        notifyExceptionById[community.id] = communityNotifySettings;
+
+        if (communityNotifySettings.mutedUntil) {
+          scheduleMutedChatUpdate(community.id, communityNotifySettings.mutedUntil, sendApiUpdate);
+        }
+      }
+
+      if (withPinned && dialog.pinned) {
+        orderedPinnedIds.push(community.id);
+      }
+
+      return;
+    }
+
     if (
       !(dialog instanceof GramJs.Dialog)
       // This request can return dialogs not belonging to specified folder
@@ -249,12 +285,14 @@ export async function fetchChats({
     totalChatCount = chatIds.length;
   }
 
-  const lastDialog = chats[chats.length - 1];
-  const lastMessageId = lastMessageByChatId[lastDialog?.id];
-  const nextOffsetId = lastMessageId;
-  const nextOffsetPeerId = lastDialog?.id;
+  // Pinned and community dialogs cannot serve as offsets for the unpinned page
+  const lastDialog = result.dialogs.slice().reverse().find(
+    (dialog): dialog is GramJs.Dialog => dialog instanceof GramJs.Dialog && Boolean(dialog.topMessage),
+  );
+  const nextOffsetId = lastDialog?.topMessage;
+  const nextOffsetPeerId = lastDialog ? getApiChatIdFromMtpPeer(lastDialog.peer) : undefined;
   const nextOffsetDate = messages.reverse()
-    .find((message) => message.chatId === lastDialog?.id && message.id === lastMessageId)?.date;
+    .find((message) => message.chatId === nextOffsetPeerId && message.id === nextOffsetId)?.date;
 
   return {
     chatIds,
@@ -270,6 +308,7 @@ export async function fetchChats({
     nextOffsetId,
     nextOffsetPeerId,
     nextOffsetDate,
+    isFullyLoaded: nextOffsetDate === undefined ? true : undefined,
     threadReadStatesById,
     threadInfos,
   };
@@ -431,7 +470,21 @@ export async function fetchPeerSettings(peer: ApiPeer) {
 }
 
 export async function searchChats({ query }: { query: string }) {
-  const result = await invokeRequest(new GramJs.contacts.Search({ q: query, limit: GLOBAL_SEARCH_CONTACTS_LIMIT }));
+  const request = new GramJs.contacts.Search({ q: query, limit: GLOBAL_SEARCH_CONTACTS_LIMIT });
+  let result;
+  try {
+    result = await invokeRequest(request, { shouldThrow: true });
+  } catch (err: any) {
+    // TDLib treats this error as empty search results:
+    // https://github.com/tdlib/td/blob/c15d3f5a5de6e3ba5839822c451152e5e18bb700/td/telegram/DialogManager.cpp#L191-L198
+    if (err instanceof RPCError && err.errorMessage === 'QUERY_TOO_SHORT') {
+      return { accountResultIds: [], globalResultIds: [] };
+    }
+
+    dispatchErrorUpdate(err, request);
+    return undefined;
+  }
+
   if (!result) {
     return undefined;
   }
@@ -447,9 +500,9 @@ export async function searchChats({ query }: { query: string }) {
 }
 
 export async function fetchChat({
-  type, user,
+  type, user, shouldRequestUpdate,
 }: {
-  type: 'user' | 'self' | 'support'; user?: ApiUser;
+  type: 'user' | 'self' | 'support'; user?: ApiUser; shouldRequestUpdate?: boolean;
 }) {
   let mtpUser: GramJs.TypeUser | undefined;
 
@@ -478,6 +531,10 @@ export async function fetchChat({
   const chat = buildApiChatFromPreview(mtpUser!, type === 'support');
   if (!chat) {
     return undefined;
+  }
+
+  if (shouldRequestUpdate) {
+    await requestChatUpdate({ chat });
   }
 
   sendApiUpdate({
@@ -576,10 +633,16 @@ export function saveDraft({
   chat: ApiChat;
   draft?: ApiDraft;
 }) {
+  const richMessage = draft?.richMessage && buildInputRichMessage(draft.richMessage);
+  if (draft?.richMessage && !richMessage) {
+    return Promise.resolve(false);
+  }
+
   return invokeRequest(new GramJs.messages.SaveDraft({
     peer: buildInputPeer(chat.id, chat.accessHash),
-    message: draft?.text?.text || DEFAULT_PRIMITIVES.STRING,
-    entities: draft?.text?.entities?.map(buildMtpMessageEntity),
+    message: draft?.richMessage ? DEFAULT_PRIMITIVES.STRING : draft?.text?.text || DEFAULT_PRIMITIVES.STRING,
+    entities: draft?.richMessage ? undefined : draft?.text?.entities?.map(buildMtpMessageEntity),
+    richMessage,
     replyTo: draft?.replyInfo && buildInputReplyTo(draft.replyInfo),
     suggestedPost: draft?.suggestedPostInfo && buildInputSuggestedPost(draft.suggestedPostInfo),
   }));
@@ -607,6 +670,7 @@ async function getFullChatInfo(chatId: string): Promise<FullChatData | undefined
     translationsDisabled,
     reactionsLimit,
     hasScheduled,
+    ttlPeriod,
   } = result.fullChat;
 
   if (chatPhoto) {
@@ -626,6 +690,7 @@ async function getFullChatInfo(chatId: string): Promise<FullChatData | undefined
     fullInfo: {
       ...(chatPhoto instanceof GramJs.Photo && { profilePhoto: buildApiPhoto(chatPhoto) }),
       about,
+      ttlPeriod,
       members,
       adminMembersById: adminMembers ? buildCollectionByKey(adminMembers, 'userId') : undefined,
       canViewMembers: true,
@@ -708,6 +773,7 @@ async function getFullChannelInfo(
     paidMessagesAvailable,
     mainTab,
     guardBotId,
+    ttlPeriod,
   } = result.fullChat;
 
   if (chatPhoto) {
@@ -767,6 +833,7 @@ async function getFullChannelInfo(
     fullInfo: {
       ...(chatPhoto instanceof GramJs.Photo && { profilePhoto: buildApiPhoto(chatPhoto) }),
       about,
+      ttlPeriod,
       onlineCount,
       inviteLink,
       slowMode: slowmodeSeconds ? {
@@ -832,10 +899,12 @@ export function updateChatNotifySettings({
 }: {
   chat: ApiChat; settings: Partial<ApiPeerNotifySettings>;
 }) {
+  const notifyPeer = chat.type === 'chatTypeCommunity'
+    ? new GramJs.InputNotifyCommunity({ community: buildInputChannel(chat.id, chat.accessHash) })
+    : new GramJs.InputNotifyPeer({ peer: buildInputPeer(chat.id, chat.accessHash) });
+
   invokeRequest(new GramJs.account.UpdateNotifySettings({
-    peer: new GramJs.InputNotifyPeer({
-      peer: buildInputPeer(chat.id, chat.accessHash),
-    }),
+    peer: notifyPeer,
     settings: new GramJs.InputPeerNotifySettings({
       muteUntil: settings.mutedUntil,
       showPreviews: settings.shouldShowPreviews,
@@ -933,9 +1002,9 @@ export async function createChannel({
 }
 
 export async function joinChannel({
-  channelId, accessHash,
+  channelId, accessHash, theme,
 }: {
-  channelId: string; accessHash: string;
+  channelId: string; accessHash: string; theme?: ApiThemeParameters;
 }): Promise<ApiChatInviteJoinWebView | { type: 'ok' } | undefined> {
   const result = await invokeRequest(new GramJs.channels.JoinChannel({
     channel: buildInputChannel(channelId, accessHash),
@@ -948,7 +1017,7 @@ export async function joinChannel({
   }
 
   if (result instanceof GramJs.messages.ChatInviteJoinResultWebView) {
-    return buildApiChatInviteWebView(result);
+    return requestChatJoinWebView(result, theme);
   }
 
   return { type: 'ok' };
@@ -1147,10 +1216,12 @@ export async function toggleChatPinned({
 }) {
   const { id, accessHash } = chat;
 
+  const dialogPeer = chat.type === 'chatTypeCommunity'
+    ? new GramJs.InputDialogPeerCommunity({ community: buildInputChannel(id, accessHash) })
+    : new GramJs.InputDialogPeer({ peer: buildInputPeer(id, accessHash) });
+
   const isActionSuccessful = await invokeRequest(new GramJs.messages.ToggleDialogPin({
-    peer: new GramJs.InputDialogPeer({
-      peer: buildInputPeer(id, accessHash),
-    }),
+    peer: dialogPeer,
     pinned: shouldBePinned || undefined,
   }));
 
@@ -1244,7 +1315,11 @@ export async function fetchPinnedDialogs({
   const { dialogs, messages, chats, users } = result;
 
   return {
-    dialogIds: dialogs.map((dialog) => getApiChatIdFromMtpPeer(dialog.peer)),
+    dialogIds: dialogs.map((dialog) => {
+      if (dialog instanceof GramJs.Dialog) return getApiChatIdFromMtpPeer(dialog.peer);
+      if (dialog instanceof GramJs.DialogCommunity) return buildApiPeerId(dialog.communityId, 'channel');
+      return undefined;
+    }).filter(Boolean),
     messages: messages.map((message) => buildApiMessage(message)).filter(Boolean),
     chats: chats.map((chat) => buildApiChatFromPreview(chat)).filter(Boolean),
     users: users.map((user) => buildApiUser(user)).filter(Boolean),
@@ -1416,10 +1491,10 @@ export function updateChatDefaultBannedRights({
 }
 
 export function updateChatMemberBannedRights({
-  chat, user, bannedRights, untilDate,
-}: { chat: ApiChat; user: ApiUser; bannedRights: ApiChatBannedRights; untilDate?: number }) {
+  chat, peer, bannedRights, untilDate,
+}: { chat: ApiChat; peer: ApiPeer; bannedRights: ApiChatBannedRights; untilDate?: number }) {
   const channel = buildInputChannel(chat.id, chat.accessHash);
-  const participant = buildInputPeer(user.id, user.accessHash);
+  const participant = buildInputPeer(peer.id, peer.accessHash);
 
   return invokeRequest(new GramJs.channels.EditBanned({
     channel,
@@ -1804,22 +1879,8 @@ function preparePeers(
   return store;
 }
 
-function buildApiChatInviteWebView(
-  result: GramJs.messages.ChatInviteJoinResultWebView,
-): ApiChatInviteJoinWebView {
-  const { botId, webview } = result;
-
-  return {
-    type: 'webView',
-    botId: buildApiPeerId(botId, 'user'),
-    url: webview.url,
-    queryId: webview.queryId?.toString(),
-    isFullscreen: Boolean(webview.fullscreen),
-  };
-}
-
 export async function importChatInvite(
-  { hash }: { hash: string },
+  { hash, theme }: { hash: string; theme?: ApiThemeParameters },
 ): Promise<ApiChatInviteJoinWebView | { type: 'ok'; chat: ApiChat } | undefined> {
   const result = await invokeRequest(new GramJs.messages.ImportChatInvite({ hash }));
   if (!result) {
@@ -1827,7 +1888,7 @@ export async function importChatInvite(
   }
 
   if (result instanceof GramJs.messages.ChatInviteJoinResultWebView) {
-    return buildApiChatInviteWebView(result);
+    return requestChatJoinWebView(result, theme);
   }
 
   const updates = result.updates;
@@ -1845,6 +1906,29 @@ export async function importChatInvite(
   return {
     type: 'ok',
     chat,
+  };
+}
+
+async function requestChatJoinWebView(
+  result: GramJs.messages.ChatInviteJoinResultWebView,
+  theme?: ApiThemeParameters,
+): Promise<ApiChatInviteJoinWebView | undefined> {
+  const webView = await invokeRequest(new GramJs.messages.RequestChatJoinWebView({
+    queryId: result.queryId,
+    themeParams: theme ? buildInputThemeParams(theme) : undefined,
+    platform: WEB_APP_PLATFORM,
+  }));
+  if (!(webView instanceof GramJs.WebViewResultUrl)) {
+    return undefined;
+  }
+
+  return {
+    type: 'webView',
+    botId: buildApiPeerId(result.botId, 'user'),
+    url: webView.url,
+    queryId: (webView.queryId ?? result.queryId).toString(),
+    isFullscreen: Boolean(webView.fullscreen),
+    isSameOrigin: webView.sameOrigin,
   };
 }
 
@@ -1870,6 +1954,19 @@ export function toggleIsProtected({
   return invokeRequest(new GramJs.messages.ToggleNoForwards({
     peer: buildInputPeer(id, accessHash),
     enabled: isProtected,
+  }), {
+    shouldReturnTrue: true,
+  });
+}
+
+export function setHistoryTtl({
+  peer, period,
+}: { peer: ApiPeer; period: number }) {
+  const { id, accessHash } = peer;
+
+  return invokeRequest(new GramJs.messages.SetHistoryTTL({
+    peer: buildInputPeer(id, accessHash),
+    period,
   }), {
     shouldReturnTrue: true,
   });

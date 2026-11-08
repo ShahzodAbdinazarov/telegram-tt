@@ -1,5 +1,4 @@
 import type { TeactNode } from '../../../lib/teact/teact';
-import type React from '../../../lib/teact/teact';
 import {
   memo, useCallback, useEffect,
   useMemo,
@@ -12,8 +11,8 @@ import focusNoScroll from '../../../util/focusNoScroll';
 import { MEMO_EMPTY_ARRAY } from '../../../util/memo';
 
 import useInfiniteScroll from '../../../hooks/useInfiniteScroll';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
 import Island from '../../gili/layout/Island';
 import Checkbox from '../../ui/Checkbox';
@@ -95,7 +94,7 @@ const ItemPicker = ({
   onLoadMore,
   ...optionalProps
 }: OwnProps) => {
-  const lang = useOldLang();
+  const lang = useLang();
   const inputRef = useRef<HTMLInputElement>();
 
   const allowMultiple = optionalProps.allowMultiple;
@@ -179,12 +178,12 @@ const ItemPicker = ({
     const isChecked = selectedValues.includes(value);
 
     function getInputElement() {
-      if (isLocked) return <Icon name="lock-badge" />;
+      if (isLocked) return <Icon name="lock-filled" />;
       if (itemInputType === 'radio') {
         return <Radio checked={isChecked} disabled={isLocked} isLoading={isItemLoading} onlyInput />;
       }
       if (itemInputType === 'checkbox') {
-        return <Checkbox checked={isChecked} disabled={isLocked} isLoading={isItemLoading} onlyInput />;
+        return <Checkbox checked={isChecked} disabled={isLocked} isLoading={isItemLoading} onlyInput isRound />;
       }
       return undefined;
     }

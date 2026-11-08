@@ -13,9 +13,7 @@ import type {
 } from '../types';
 import { MAIN_THREAD_ID } from '../../api/types';
 
-import {
-  IS_MOCKED_CLIENT, IS_TEST, MESSAGE_LIST_SLICE, MESSAGE_LIST_VIEWPORT_LIMIT, TMP_CHAT_ID,
-} from '../../config';
+import { DEBUG, IS_TEST, MESSAGE_LIST_SLICE, MESSAGE_LIST_VIEWPORT_LIMIT, TMP_CHAT_ID } from '../../config';
 import { areDeepEqual } from '../../util/areDeepEqual';
 import { addTimestampEntities } from '../../util/dates/timestamp';
 import { getCurrentTabId } from '../../util/establishMultitabRole';
@@ -25,10 +23,16 @@ import {
 import { isLocalMessageId, type MessageKey } from '../../util/keys/messageKey';
 import { unload } from '../../util/mediaLoader';
 import {
+  buildAnchoredEphemeralMessage,
   getAllMessageMediaHashes,
   getMessageStatefulContent,
   groupMessageIdsByThreadId,
-  hasMessageTtl, isMediaLoadableInViewer, mergeIdRanges, orderHistoryIds, orderPinnedIds,
+  hasMessageTtl,
+  hasWindowedMediaContent,
+  mergeIdRanges,
+  orderHistoryIds,
+  orderPinnedIds,
+  WINDOWED_MEDIA_SEARCH_TYPES,
 } from '../helpers';
 import { getEmojiOnlyCountForMessage } from '../helpers/getEmojiOnlyCountForMessage';
 import {
@@ -73,9 +77,9 @@ export function updateCurrentMessageList<T extends GlobalState>(
   shouldReplaceLast?: boolean,
   ...[tabId = getCurrentTabId()]: TabArgs<T>
 ): T {
-  const { messageLists } = selectTabState(global, tabId);
+  const { messageLists, aiMessageEditorModal, aiMessageEditorPendingResult } = selectTabState(global, tabId);
   let newMessageLists: MessageList[];
-  if (shouldReplaceHistory || (IS_TEST && !IS_MOCKED_CLIENT)) {
+  if (shouldReplaceHistory || IS_TEST) {
     newMessageLists = chatId ? [{ chatId, threadId, type }] : [];
   } else if (chatId) {
     const current = messageLists[messageLists.length - 1];
@@ -98,38 +102,162 @@ export function updateCurrentMessageList<T extends GlobalState>(
     newMessageLists = messageLists.slice(0, -1);
   }
 
+  const previousList = messageLists[messageLists.length - 1];
+  const nextList = newMessageLists[newMessageLists.length - 1];
+  const hasChanged = previousList?.chatId !== nextList?.chatId || previousList?.threadId !== nextList?.threadId
+    || previousList?.type !== nextList?.type;
+
   return updateTabState(global, {
     messageLists: newMessageLists,
+    aiMessageEditorModal: hasChanged ? undefined : aiMessageEditorModal,
+    aiMessageEditorPendingResult: hasChanged ? undefined : aiMessageEditorPendingResult,
   }, tabId);
 }
 
 export function replaceChatMessages<T extends GlobalState>(
   global: T, chatId: string, newById: Record<number, ApiMessage>,
 ): T {
-  return updateMessageStore(global, chatId, {
+  const store = global.messages.byChatId[chatId];
+  global = updateMessageStore(global, chatId, {
     byId: newById,
   });
+
+  Object.values(store?.ephemeralById || {}).forEach((message) => {
+    if (!message.anchorMsgId) return;
+    const anchor = newById[message.anchorMsgId];
+    const previousAnchor = store.byId[message.anchorMsgId];
+    if (anchor === previousAnchor || areDeepEqual(anchor, previousAnchor)) return;
+
+    if (!anchor || anchor.isDeleting || anchor.groupedId || anchor.content.action || (previousAnchor && (
+      !areDeepEqual(anchor.content, previousAnchor.content) || anchor.editDate !== previousAnchor.editDate
+    ))) {
+      global = deleteEphemeralMessages(global, chatId, [message.id]);
+      return;
+    }
+
+    global = updateEphemeralMessage(global, message);
+  });
+
+  return global;
+}
+
+type MessageStoreBatch = {
+  source: GlobalState['messages']['byChatId'];
+  copy?: GlobalState['messages']['byChatId'];
+};
+
+let messageStoreBatch: MessageStoreBatch | undefined;
+
+// Updating many chats at once stays linear: `messages.byChatId` is copied once, not on every write.
+// `fn` must be synchronous and must not publish or fork the global it receives.
+export function batchMessageStoreUpdates<T extends GlobalState>(global: T, fn: (global: T) => T): T {
+  if (messageStoreBatch) {
+    return fn(global);
+  }
+
+  const batch: MessageStoreBatch = { source: global.messages.byChatId };
+  messageStoreBatch = batch;
+
+  try {
+    const result = fn(global);
+
+    if (DEBUG && batch.copy && result.messages.byChatId !== batch.copy) {
+      // eslint-disable-next-line no-console
+      console.error('[batchMessageStoreUpdates] `fn` left the batched `byChatId`, so updates were not batched');
+    }
+
+    return result;
+  } finally {
+    messageStoreBatch = undefined;
+  }
 }
 
 export function updateMessageStore<T extends GlobalState>(
   global: T, chatId: string, update: Partial<MessageStoreSections>,
 ): T {
-  const current = global.messages.byChatId[chatId]
-    || { byId: {}, threadsById: {}, summaryById: {} };
+  const { byChatId } = global.messages;
+  const current = byChatId[chatId]
+    || { byId: {}, ephemeralById: {}, anchoredById: {}, threadsById: {}, summaryById: {} };
+  const newStore = {
+    ...current,
+    ...update,
+  };
+
+  if (messageStoreBatch && byChatId === messageStoreBatch.copy) {
+    byChatId[chatId] = newStore;
+    return global;
+  }
+
+  const newByChatId = {
+    ...byChatId,
+    [chatId]: newStore,
+  };
+  if (messageStoreBatch && byChatId === messageStoreBatch.source) {
+    messageStoreBatch.copy = newByChatId;
+  }
 
   return {
     ...global,
     messages: {
       ...global.messages,
-      byChatId: {
-        ...global.messages.byChatId,
-        [chatId]: {
-          ...current,
-          ...update,
-        },
-      },
+      byChatId: newByChatId,
     },
   };
+}
+
+export function updateEphemeralMessage<T extends GlobalState>(
+  global: T, message: ApiMessage,
+): T {
+  const store = global.messages.byChatId[message.chatId];
+  let anchoredById = store?.anchoredById || {};
+  let ephemeralById = store?.ephemeralById || {};
+  if (message.anchorMsgId) {
+    const anchor = selectChatMessage(global, message.chatId, message.anchorMsgId);
+    if (anchor && (anchor.content.action || anchor.groupedId || anchor.isDeleting)) return global;
+
+    const previous = Object.values(ephemeralById).find(({ anchorMsgId }) => anchorMsgId === message.anchorMsgId);
+    if (previous && previous.id !== message.id) {
+      ephemeralById = omit(ephemeralById, [previous.id]);
+    }
+    if (anchor) {
+      anchoredById = {
+        ...anchoredById,
+        [anchor.id]: buildAnchoredEphemeralMessage(anchor, message),
+      };
+    }
+  }
+
+  return updateMessageStore(global, message.chatId, {
+    anchoredById,
+    ephemeralById: {
+      ...ephemeralById,
+      [message.id]: message,
+    },
+  });
+}
+
+export function deleteEphemeralMessages<T extends GlobalState>(
+  global: T, chatId: string, messageIds: number[],
+): T {
+  const store = global.messages.byChatId[chatId];
+  const ephemeralById = store?.ephemeralById;
+  if (!ephemeralById || !messageIds.some((id) => ephemeralById[id])) return global;
+
+  const anchorIds = messageIds.map((id) => {
+    const anchorId = ephemeralById[id]?.anchorMsgId;
+    return anchorId && store.anchoredById[anchorId]?.ephemeralId === id ? anchorId : undefined;
+  }).filter(Boolean);
+  return updateMessageStore(global, chatId, {
+    anchoredById: anchorIds.length ? omit(store.anchoredById, anchorIds) : store.anchoredById,
+    ephemeralById: omit(ephemeralById, messageIds),
+  });
+}
+
+export function clearEphemeralMessages<T extends GlobalState>(global: T, chatId: string): T {
+  const ephemeralById = global.messages.byChatId[chatId]?.ephemeralById;
+  if (!ephemeralById || !Object.keys(ephemeralById).length) return global;
+
+  return updateMessageStore(global, chatId, { ephemeralById: {}, anchoredById: {} });
 }
 
 export function addMessages<T extends GlobalState>(
@@ -338,7 +466,7 @@ export function deleteChatMessages<T extends GlobalState>(
         unload(hash);
       });
     }
-    if (!shouldPreserveMedia && isMediaLoadableInViewer(message)) {
+    if (!shouldPreserveMedia && hasWindowedMediaContent(message)) {
       mediaIdsToRemove.push(messageId);
     }
     const threadId = selectThreadIdFromMessage(global, message);
@@ -396,7 +524,9 @@ export function deleteChatMessages<T extends GlobalState>(
       }
 
       mediaIdsToRemove.forEach((mediaId) => {
-        global = removeIdFromSearchResults(global, chatId, threadId, mediaId, tabId);
+        WINDOWED_MEDIA_SEARCH_TYPES.forEach((mediaType) => {
+          global = removeIdFromSearchResults(global, chatId, threadId, mediaType, mediaId, tabId);
+        });
       });
 
       const viewportIds = selectViewportIds(global, chatId, threadId, tabId);
@@ -741,7 +871,7 @@ export function toggleMessageSelection<T extends GlobalState>(
     newMessageIds = [...messageIds, ...newSelectedMessageIds];
   }
 
-  if (!newMessageIds.length) {
+  if (!newMessageIds.length && !oldSelectedMessages.reportContext) {
     return exitMessageSelectMode(global, tabId);
   }
 

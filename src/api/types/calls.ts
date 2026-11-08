@@ -5,9 +5,11 @@ import type {
   VideoRotation,
   VideoState,
 } from '../../lib/vibecalls';
-import type { PrimitiveRecord } from '../../util/primitives/primitiveRecord';
+export type ApiPhoneCallConfig = {
+  shouldUseSctp: boolean;
+};
 
-export type ApiPhoneCallCustomParameters = PrimitiveRecord;
+export type ApiPhoneCallCustomParameters = ApiPhoneCallConfig;
 
 export interface ApiGroupCall {
   chatId?: string;
@@ -56,6 +58,8 @@ export interface ApiPhoneCall {
   reason?: 'missed' | 'disconnect' | 'hangup' | 'busy';
   duration?: number;
   customParameters?: ApiPhoneCallCustomParameters;
+  // Set when this session requested or accepted the call and therefore drives its key exchange
+  isKeyExchangeOwner?: boolean;
 
   emojis?: string;
   gA?: number[];

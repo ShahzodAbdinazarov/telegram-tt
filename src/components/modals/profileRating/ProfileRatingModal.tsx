@@ -7,7 +7,7 @@ import type { TabState } from '../../../global/types';
 import { getPeerTitle } from '../../../global/helpers/peers';
 import { selectUser, selectUserFullInfo } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
-import { formatShortDuration } from '../../../util/dates/oldDateFormat';
+import { formatShortDuration } from '../../../util/dates/duration';
 import { NEXT_ARROW_REPLACEMENT } from '../../../util/localization/format';
 import { getServerTime } from '../../../util/serverTime';
 
@@ -203,7 +203,7 @@ const ProfileRatingModal = ({
     lang, handleShowFuture, handleShowCurrent]);
 
   const listItemData = [
-    ['closed-gift', lang('RatingGiftsFromTelegram'), (
+    ['gift', lang('RatingGiftsFromTelegram'), (
       <span>
         {renderBadge('added')}
         {lang('RatingGiftsFromTelegramDesc')}

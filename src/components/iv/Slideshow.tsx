@@ -1,5 +1,5 @@
 import type { TeactNode } from '../../lib/teact/teact';
-import { useRef, useState } from '../../lib/teact/teact';
+import { useMemo, useRef, useState } from '../../lib/teact/teact';
 
 import type {
   ApiPageBlockPhoto,
@@ -10,12 +10,16 @@ import type { ObserveFn } from '../../hooks/useIntersectionObserver';
 import type { ThemeKey } from '../../types';
 
 import { requestMeasure } from '../../lib/fasterdom/fasterdom';
+import { getMediaDimensions } from '../../global/helpers';
 import buildClassName from '../../util/buildClassName';
+import buildStyle from '../../util/buildStyle';
 import { getPageMediaBlockId, getPageMediaBlockMedia } from './helpers/pageMedia';
 
+import useHorizontalScroll from '../../hooks/useHorizontalScroll';
 import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import useScrollableHint from '../../hooks/useScrollableHint';
+import useScrollToActiveTab from '../../hooks/useScrollToActiveTab';
 
 import Photo from '../middle/message/Photo';
 import Video from '../middle/message/Video';
@@ -26,41 +30,58 @@ type SlideshowItem = ApiPageBlockPhoto | ApiPageBlockVideo;
 
 type OwnProps = {
   items: SlideshowItem[];
-  isOwn?: boolean;
-  noAvatars?: boolean;
   canAutoLoadMedia?: boolean;
   isProtected?: boolean;
+  noSpoilerReveal?: boolean;
   theme: ThemeKey;
   observeIntersectionForLoading?: ObserveFn;
   observeIntersectionForPlaying?: ObserveFn;
   sourceIds: string[];
   className?: string;
+  getUploadProgress?: (item: SlideshowItem, index: number) => number | undefined;
   renderCaption: (caption: ApiPageCaption) => TeactNode;
+  renderOverlay?: (item: SlideshowItem, index: number) => TeactNode;
+  onCancelUpload?: (index: number) => void;
   onMediaClick: (index: number) => void;
 };
 
 const Slideshow = ({
   items,
-  isOwn,
-  noAvatars,
   canAutoLoadMedia,
   isProtected,
+  noSpoilerReveal,
   theme,
   observeIntersectionForLoading,
   observeIntersectionForPlaying,
   sourceIds,
   className,
+  getUploadProgress,
   renderCaption,
+  renderOverlay,
+  onCancelUpload,
   onMediaClick,
 }: OwnProps) => {
   const scrollerRef = useRef<HTMLDivElement>();
+  const dotsRef = useRef<HTMLDivElement>();
   const [activeIndex, setActiveIndex] = useState(0);
 
   const lang = useLang();
   const hasMultipleSlides = items.length > 1;
   const clampedIndex = Math.max(0, Math.min(activeIndex, items.length - 1));
+  const aspectRatio = useMemo(() => {
+    const ratios = items.map((item) => {
+      const dimensions = getMediaDimensions(getPageMediaBlockMedia(item));
+      return dimensions.isFallback ? undefined : dimensions.width / dimensions.height;
+    }).filter((ratio): ratio is number => ratio !== undefined);
+
+    return ratios.length
+      ? ratios.reduce((total, ratio) => total + ratio, 0) / ratios.length
+      : 16 / 9;
+  }, [items]);
 
   useScrollableHint(scrollerRef, { isDisabled: !hasMultipleSlides });
+  useHorizontalScroll(dotsRef, !hasMultipleSlides, true, true);
+  useScrollToActiveTab(dotsRef, clampedIndex);
 
   const scrollToSlide = useLastCallback((index: number) => {
     const scroller = scrollerRef.current;
@@ -104,7 +125,10 @@ const Slideshow = ({
 
   return (
     <>
-      <div className={buildClassName(styles.root, className)}>
+      <div
+        className={buildClassName(styles.root, className)}
+        style={buildStyle(`--slideshow-aspect-ratio: ${aspectRatio}`)}
+      >
         <div
           ref={scrollerRef}
           className={buildClassName(styles.scroller, 'no-scrollbar')}
@@ -115,14 +139,17 @@ const Slideshow = ({
             <div key={`${getSlideshowItemId(item)}-${index}`} className={styles.slide}>
               {renderSlideshowItem(item, {
                 index,
-                sourceId: sourceIds[index],
-                isOwn,
-                noAvatars,
+                // Only the active slide is a target for the Media Viewer ghost animation
+                sourceId: index === clampedIndex ? sourceIds[index] : undefined,
                 canAutoLoadMedia,
                 isProtected,
+                noSpoilerReveal,
                 theme,
                 observeIntersectionForLoading,
                 observeIntersectionForPlaying,
+                getUploadProgress,
+                renderOverlay,
+                onCancelUpload,
                 onMediaClick,
               })}
             </div>
@@ -148,7 +175,7 @@ const Slideshow = ({
                 onClick={handleNextClick}
               />
             )}
-            <div className={styles.dots}>
+            <div ref={dotsRef} className={buildClassName(styles.dots, 'no-scrollbar')} dir="ltr">
               {items.map((item, index) => (
                 <button
                   key={`${getSlideshowItemId(item)}-${index}`}
@@ -170,10 +197,9 @@ const Slideshow = ({
 };
 
 type RenderItemContext = Pick<OwnProps,
-  'isOwn'
-  | 'noAvatars'
-  | 'canAutoLoadMedia'
+  'canAutoLoadMedia'
   | 'isProtected'
+  | 'noSpoilerReveal'
   | 'theme'
   | 'observeIntersectionForLoading'
   | 'observeIntersectionForPlaying'
@@ -182,6 +208,9 @@ type RenderItemContext = Pick<OwnProps,
 type SlideshowItemContext = RenderItemContext & {
   index: number;
   sourceId?: string;
+  getUploadProgress?: OwnProps['getUploadProgress'];
+  renderOverlay?: OwnProps['renderOverlay'];
+  onCancelUpload?: OwnProps['onCancelUpload'];
   onMediaClick: (index: number) => void;
 };
 
@@ -189,34 +218,46 @@ function renderSlideshowItem(item: SlideshowItem, context: SlideshowItemContext)
   switch (item.type) {
     case 'photo':
       return (
-        <Photo
-          id={context.sourceId}
-          photo={getPageMediaBlockMedia(item)}
-          isOwn={context.isOwn}
-          noAvatars={context.noAvatars}
-          canAutoLoad={context.canAutoLoadMedia}
-          isProtected={context.isProtected}
-          theme={context.theme}
-          observeIntersection={context.observeIntersectionForLoading}
-          className={styles.media}
-          onClick={() => context.onMediaClick(context.index)}
-        />
+        <>
+          <Photo
+            id={context.sourceId}
+            photo={getPageMediaBlockMedia(item)}
+            canAutoLoad={context.canAutoLoadMedia}
+            isProtected={context.isProtected}
+            noSpoilerReveal={context.noSpoilerReveal}
+            theme={context.theme}
+            observeIntersection={context.observeIntersectionForLoading}
+            uploadProgress={context.getUploadProgress?.(item, context.index)}
+            layout="fill"
+            className={styles.media}
+            clickArg={context.index}
+            onClick={context.onMediaClick}
+            onCancelUpload={context.onCancelUpload}
+          />
+          {context.renderOverlay?.(item, context.index)}
+        </>
       );
     case 'video':
       return (
-        <Video
-          id={context.sourceId}
-          video={getPageMediaBlockMedia(item)}
-          isOwn={context.isOwn}
-          noAvatars={context.noAvatars}
-          canAutoLoad={context.canAutoLoadMedia}
-          canAutoPlay={item.isAutoplay && context.canAutoLoadMedia}
-          isProtected={context.isProtected}
-          observeIntersectionForLoading={context.observeIntersectionForLoading}
-          observeIntersectionForPlaying={context.observeIntersectionForPlaying}
-          className={styles.media}
-          onClick={() => context.onMediaClick(context.index)}
-        />
+        <>
+          <Video
+            id={context.sourceId}
+            video={getPageMediaBlockMedia(item)}
+            canAutoLoad={context.canAutoLoadMedia}
+            canAutoPlay={item.isAutoplay && context.canAutoLoadMedia}
+            isProtected={context.isProtected}
+            noSpoilerReveal={context.noSpoilerReveal}
+            observeIntersectionForLoading={context.observeIntersectionForLoading}
+            observeIntersectionForPlaying={context.observeIntersectionForPlaying}
+            uploadProgress={context.getUploadProgress?.(item, context.index)}
+            layout="fill"
+            className={styles.media}
+            clickArg={context.index}
+            onClick={context.onMediaClick}
+            onCancelUpload={context.onCancelUpload}
+          />
+          {context.renderOverlay?.(item, context.index)}
+        </>
       );
   }
 }

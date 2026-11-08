@@ -2,10 +2,41 @@ import type {
   ApiAudio,
   ApiDocument,
   ApiGeoPoint,
+  ApiInlineButtonAction,
+  ApiKeyboardButtonStyle,
   ApiPhoto,
   ApiSticker,
   ApiVideo,
 } from './messages';
+
+export type ApiRichTextDate = {
+  type: 'date';
+  text: ApiRichText;
+  date: number;
+  relative?: true;
+  shortTime?: true;
+  longTime?: true;
+  shortDate?: true;
+  longDate?: true;
+  dayOfWeek?: true;
+};
+
+export type ApiRichButtonStyle = {
+  type?: ApiKeyboardButtonStyle['type'];
+  isLink?: boolean;
+};
+
+export type ApiRichButton = {
+  text: ApiRichText;
+  action: ApiInlineButtonAction;
+  style?: ApiRichButtonStyle;
+};
+
+export type ApiPageBlockButtonRow = {
+  type: 'buttonRow';
+  buttons: ApiRichButton[];
+  align?: 'left' | 'center' | 'right';
+};
 
 export type ApiRichText =
   { type: 'empty' }
@@ -35,18 +66,10 @@ export type ApiRichText =
   | { type: 'autoEmail'; text: ApiRichText }
   | { type: 'autoPhone'; text: ApiRichText }
   | { type: 'bankCard'; text: ApiRichText }
+  | { type: 'tonAddress'; text: ApiRichText }
   | { type: 'mentionName'; text: ApiRichText; userId: string }
-  | {
-    type: 'date';
-    text: ApiRichText;
-    date: number;
-    relative?: true;
-    shortTime?: true;
-    longTime?: true;
-    shortDate?: true;
-    longDate?: true;
-    dayOfWeek?: true;
-  };
+  | ApiRichTextDate
+  | ({ type: 'button' } & ApiRichButton);
 
 export interface ApiPageCaption {
   text: ApiRichText;
@@ -112,6 +135,7 @@ export type ApiPageBlockBlockquote = {
   type: 'blockquote';
   text: ApiRichText;
   caption: ApiRichText;
+  canCollapse?: true;
 };
 
 export type ApiPageBlockPullquote = {
@@ -207,6 +231,7 @@ export type ApiPageBlockTable = {
   rows: ApiPageTableRow[];
   isBordered?: true;
   isStriped?: true;
+  isCompact?: true;
 };
 
 export type ApiPageBlockOrderedList = {
@@ -215,6 +240,18 @@ export type ApiPageBlockOrderedList = {
   start?: number;
   orderType?: string;
   isReversed?: true;
+};
+
+export type ApiPageBlockDocument = {
+  type: 'document';
+  document: ApiDocument;
+  caption: ApiPageCaption;
+};
+
+export type ApiPageBlockAudio = {
+  type: 'audio';
+  audio: ApiAudio;
+  caption: ApiPageCaption;
 };
 
 export type ApiPageBlock =
@@ -241,7 +278,8 @@ export type ApiPageBlock =
   | ApiPageBlockCollage
   | ApiPageBlockSlideshow
   | { type: 'channel'; channelUsername: string; title: string }
-  | { type: 'audio'; audio: ApiAudio; caption: ApiPageCaption }
+  | ApiPageBlockAudio
+  | ApiPageBlockDocument
   | { type: 'kicker'; text: ApiRichText }
   | ApiPageBlockTable
   | ApiPageBlockOrderedList
@@ -255,7 +293,8 @@ export type ApiPageBlock =
   | { type: 'heading5'; text: ApiRichText }
   | { type: 'heading6'; text: ApiRichText }
   | { type: 'thinking'; text: ApiRichText }
-  | { type: 'math'; source: string };
+  | { type: 'math'; source: string }
+  | ApiPageBlockButtonRow;
 
 export interface ApiInstantViewPage {
   url: string;

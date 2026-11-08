@@ -1,9 +1,9 @@
 import { Api as GramJs } from '../../../lib/gramjs';
 import { RPCError } from '../../../lib/gramjs/errors';
 
-import type { LANG_PACKS } from '../../../config';
 import type {
   ApiBirthday,
+  ApiChat,
   ApiDisallowedGiftsSettings,
   ApiInputPrivacyRules,
   ApiLanguage,
@@ -36,16 +36,17 @@ import {
   buildApiWallpaper,
   buildApiWebSession,
   buildLangStrings,
-  oldBuildLangPack,
 } from '../apiBuilders/misc';
 import {
   buildApiPeerColors,
+  buildApiPeerId,
   buildApiPeerNotifySettings,
   buildApiPeerProfileColors,
   getApiChatIdFromMtpPeer,
 } from '../apiBuilders/peers';
 import {
   buildDisallowedGiftsSettings,
+  buildInputBirthday,
   buildInputChannel,
   buildInputPeer,
   buildInputPhoto,
@@ -58,8 +59,6 @@ import { buildInputPasskeyCredential } from '../gramjsBuilders/passkeys';
 import { addPhotoToLocalDb } from '../helpers/localDb';
 import localDb from '../localDb';
 import { getClient, invokeRequest, uploadFile } from './client';
-
-const BETA_LANG_CODES = ['ar', 'fa', 'id', 'ko', 'uz', 'en'];
 
 export function updateProfile({
   firstName,
@@ -108,11 +107,26 @@ export function updateUsername(username: string) {
 
 export function updateBirthday(birthday?: ApiBirthday) {
   return invokeRequest(new GramJs.account.UpdateBirthday({
-    birthday: birthday ? new GramJs.Birthday({
-      day: birthday.day,
-      month: birthday.month,
-      year: birthday.year,
-    }) : undefined,
+    birthday: birthday ? buildInputBirthday(birthday) : undefined,
+  }), {
+    shouldReturnTrue: true,
+  });
+}
+
+export async function fetchAdminedPersonalChannelIds() {
+  const result = await invokeRequest(new GramJs.channels.GetAdminedPublicChannels({
+    forPersonal: true,
+  }));
+  if (!result) return undefined;
+
+  return result.chats.map(({ id }) => buildApiPeerId(id, 'channel'));
+}
+
+export function updatePersonalChannel(channel?: ApiChat) {
+  return invokeRequest(new GramJs.account.UpdatePersonalChannel({
+    channel: channel
+      ? buildInputChannel(channel.id, channel.accessHash)
+      : new GramJs.InputChannelEmpty(),
   }), {
     shouldReturnTrue: true,
   });
@@ -204,23 +218,14 @@ export async function fetchWallpapers() {
     return undefined;
   }
 
-  const filteredWallpapers = result.wallpapers.filter((wallpaper) => {
-    if (
-      !(wallpaper instanceof GramJs.WallPaper)
-      || !(wallpaper.document instanceof GramJs.Document)
-    ) {
-      return false;
+  result.wallpapers.forEach((wallpaper) => {
+    if (wallpaper instanceof GramJs.WallPaper && wallpaper.document instanceof GramJs.Document) {
+      localDb.documents[String(wallpaper.document.id)] = wallpaper.document;
     }
-
-    return !wallpaper.pattern && wallpaper.document.mimeType !== 'application/x-tgwallpattern';
-  }) as GramJs.WallPaper[];
-
-  filteredWallpapers.forEach((wallpaper) => {
-    localDb.documents[String(wallpaper.document.id)] = wallpaper.document as GramJs.Document;
   });
 
   return {
-    wallpapers: filteredWallpapers.map(buildApiWallpaper).filter(Boolean),
+    wallpapers: result.wallpapers.map(buildApiWallpaper).filter(Boolean),
   };
 }
 
@@ -439,6 +444,8 @@ export async function fetchLangPack({
   const { strings, keysToRemove } = buildLangStrings(result.strings);
 
   return {
+    langCode: result.langCode,
+    fromVersion: result.fromVersion,
     version: result.version,
     strings,
     keysToRemove,
@@ -466,6 +473,8 @@ export async function fetchLangDifference({
   const { strings, keysToRemove } = buildLangStrings(result.strings);
 
   return {
+    langCode: result.langCode,
+    fromVersion: result.fromVersion,
     version: result.version,
     strings,
     keysToRemove,
@@ -493,7 +502,7 @@ export async function fetchLanguage({
   const result = await invokeRequest(new GramJs.langpack.GetLanguage({
     langPack,
     langCode,
-  }));
+  }), { shouldThrow: true });
   if (!result) {
     return undefined;
   }
@@ -520,25 +529,6 @@ export async function fetchLangStrings({
   }
 
   return buildLangStrings(result);
-}
-
-export async function oldFetchLangPack({ sourceLangPacks, langCode }: {
-  sourceLangPacks: typeof LANG_PACKS;
-  langCode: string;
-}) {
-  const results = await Promise.all(sourceLangPacks.map((langPack) => {
-    return invokeRequest(new GramJs.langpack.GetLangPack({
-      langPack,
-      langCode: BETA_LANG_CODES.includes(langCode) ? `${langCode}-raw` : langCode,
-    }));
-  }));
-
-  const collections = results.filter(Boolean).map(oldBuildLangPack);
-  if (!collections.length) {
-    return undefined;
-  }
-
-  return { langPack: Object.assign({}, ...collections.reverse()) as typeof collections[0] };
 }
 
 export async function fetchPrivacySettings(privacyKey: ApiPrivacyKey) {
@@ -674,6 +664,19 @@ export async function fetchCountryList({ langCode = 'en' }: { langCode?: string 
     return undefined;
   }
   return buildApiCountryList(countryList.countries);
+}
+
+export async function fetchDefaultHistoryTtl() {
+  const result = await invokeRequest(new GramJs.messages.GetDefaultHistoryTTL());
+  if (!result) return undefined;
+
+  return result.period;
+}
+
+export function setDefaultHistoryTtl({ period }: { period: number }) {
+  return invokeRequest(new GramJs.messages.SetDefaultHistoryTTL({ period }), {
+    shouldReturnTrue: true,
+  });
 }
 
 export async function fetchGlobalPrivacySettings() {

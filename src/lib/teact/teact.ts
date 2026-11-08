@@ -1,4 +1,3 @@
-/* eslint-disable @eslint-react/purity */
 /* eslint-disable @eslint-react/no-unnecessary-use-prefix */
 import type { ReactElement } from 'react';
 
@@ -360,6 +359,7 @@ let pendingEffects = new Map<number, Effect>();
 let pendingCleanups = new Map<number, EffectCleanup>();
 let pendingLayoutEffects = new Map<number, Effect>();
 let pendingLayoutCleanups = new Map<number, EffectCleanup>();
+let pendingRenderCallbacks: NoneToVoidFunction[] = [];
 let areImmediateEffectsCaptured = false;
 
 /*
@@ -413,6 +413,8 @@ const runUpdatePassOnRaf = throttleWith(requestMeasure, () => {
     .from(instancesPendingUpdate)
     .sort((a, b) => a.id - b.id);
   instancesPendingUpdate = new Set();
+  const currentRenderCallbacks = pendingRenderCallbacks;
+  pendingRenderCallbacks = [];
 
   const currentCleanups = pendingCleanups;
   pendingCleanups = new Map();
@@ -433,8 +435,14 @@ const runUpdatePassOnRaf = throttleWith(requestMeasure, () => {
     });
 
     runImmediateEffects?.();
+    currentRenderCallbacks.forEach((cb) => safeExec(cb));
   });
 });
+
+export function requestAfterRender(cb: NoneToVoidFunction) {
+  pendingRenderCallbacks.push(cb);
+  runUpdatePassOnRaf();
+}
 
 export function captureImmediateEffects() {
   if (areImmediateEffectsCaptured) {
@@ -458,6 +466,8 @@ function runCapturedImmediateEffects() {
 }
 
 export function renderComponent(componentInstance: ComponentInstance) {
+  // Apply queued state before a prop-driven render suppresses the scheduled state pass
+  prepareComponentForFrame(componentInstance);
   idsToExcludeFromUpdate.add(componentInstance.id);
 
   const { Component, props } = componentInstance;

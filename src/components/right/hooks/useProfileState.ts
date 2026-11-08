@@ -3,6 +3,7 @@ import { useEffect } from '../../../lib/teact/teact';
 
 import { ProfileState, type ProfileTabType } from '../../../types';
 
+import { requestMeasure } from '../../../lib/fasterdom/fasterdom';
 import animateScroll from '../../../util/animateScroll';
 import { throttle } from '../../../util/schedulers';
 
@@ -25,18 +26,22 @@ export default function useProfileState({
   containerRef,
   tabType,
   profileState,
+  hasProfileInfo,
   onProfileStateChange,
   forceScrollProfileTab = false,
   allowAutoScrollToTabs = false,
   handleStopAutoScrollToTabs,
+  onScrollToTop,
 }: {
   containerRef: ElementRef<HTMLDivElement>;
   tabType: ProfileTabType;
   profileState: ProfileState;
+  hasProfileInfo: boolean;
   forceScrollProfileTab?: boolean;
   allowAutoScrollToTabs?: boolean;
   onProfileStateChange: (state: ProfileState) => void;
   handleStopAutoScrollToTabs: NoneToVoidFunction;
+  onScrollToTop: NoneToVoidFunction;
 }) {
   // Scroll to tabs if needed
   useEffectWithPrevDeps(([prevTabType]) => {
@@ -75,23 +80,26 @@ export default function useProfileState({
     }
 
     const tabsEl = container.querySelector<HTMLDivElement>('.shared-media-tabs');
-    if (!tabsEl || getTabsNaturalTop(container) > container.scrollTop) {
+    if (!tabsEl || !hasProfileInfo || getTabsNaturalTop(container) > container.scrollTop) {
       return;
     }
 
     isScrollingProgrammatically = true;
+    onScrollToTop();
 
-    animateScroll({
-      container,
-      element: container.firstElementChild as HTMLElement,
-      position: 'start',
-      maxDistance: container.offsetHeight * 2,
+    requestMeasure(() => {
+      animateScroll({
+        container,
+        element: container.firstElementChild as HTMLElement,
+        position: 'start',
+        maxDistance: container.offsetHeight * 2,
+      });
     });
 
     setTimeout(() => {
       isScrollingProgrammatically = false;
     }, PROGRAMMATIC_SCROLL_TIMEOUT_MS);
-  }, [profileState, containerRef]);
+  }, [profileState, containerRef, hasProfileInfo, onScrollToTop]);
 
   const determineProfileState = useLastCallback(() => {
     const container = containerRef.current;

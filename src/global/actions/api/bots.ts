@@ -1,6 +1,5 @@
 import type { InlineBotSettings, ThreadId } from '../../../types';
 import type { WebApp } from '../../../types/webapp';
-import type { RequiredGlobalActions } from '../../index';
 import type {
   ActionReturnType, GlobalState, TabArgs,
 } from '../../types';
@@ -20,19 +19,22 @@ import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import { pick } from '../../../util/iteratees.ts';
 import { type AdvancedLangFnParameters, getTranslationFn } from '../../../util/localization';
 import { formatStarsAsText } from '../../../util/localization/format';
-import { oldTranslate } from '../../../util/oldLangProvider';
 import requestActionTimeout from '../../../util/requestActionTimeout';
 import { debounce } from '../../../util/schedulers';
 import { extractCurrentThemeParams } from '../../../util/themeStyle';
 import { callApi } from '../../../api/gramjs';
 import {
   getMainUsername,
+  getUserFullName,
   getWebAppKey,
   isChatAdmin,
+  isKeyboardButtonUnsupportedForEphemeral,
   isUserBot,
   isUserRightBanned,
   prepareMessageReplyInfo,
+  resolveEphemeralCommand,
 } from '../../helpers';
+import { isButtonUnsupported } from '../../helpers/buttons';
 import {
   addActionHandler, getActions, getGlobal, setGlobal,
 } from '../../index';
@@ -45,8 +47,8 @@ import {
   updateUserFullInfo,
 } from '../../reducers';
 import {
-  activateWebAppIfOpen,
-  addWebAppToOpenList,
+  activateBrowserTabIfOpen,
+  addBrowserTabToOpenList,
   replaceInlineBotSettings,
   replaceInlineBotsIsLoading,
 } from '../../reducers/bots';
@@ -57,10 +59,14 @@ import {
   selectChatFullInfo,
   selectChatLastMessageId,
   selectChatMessage,
+  selectChatMessageOrEphemeral,
   selectCurrentChat,
   selectCurrentMessageList,
+  selectEphemeralMessage,
   selectIsCurrentUserFrozen,
+  selectIsCurrentUserPremium,
   selectIsTrustedBot,
+  selectLanguageCode,
   selectMessageReplyInfo,
   selectPeer,
   selectSendAs,
@@ -68,11 +74,12 @@ import {
   selectTabState,
   selectUser,
   selectUserFullInfo,
+  selectWebApp,
 } from '../../selectors';
-import { selectSharedSettings } from '../../selectors/sharedState';
+import { selectCurrentLimit, selectPremiumLimit } from '../../selectors/limits';
 import { selectDraft } from '../../selectors/threads.ts';
 import { fetchChatByUsername } from './chats';
-import { getPeerStarsForMessage } from './messages';
+import { getPeerStarsForMessage, sendEphemeralMessages } from './messages';
 
 import { getIsWebAppsFullscreenSupported } from '../../../hooks/useAppLayout';
 
@@ -88,7 +95,7 @@ addActionHandler('clickSuggestedMessageButton', (global, actions, payload): Acti
     chatId, messageId, button, tabId = getCurrentTabId(),
   } = payload;
 
-  const { buttonType } = button;
+  const { buttonType } = button.action;
   const message = selectChatMessage(global, chatId, messageId);
 
   switch (buttonType) {
@@ -104,31 +111,61 @@ addActionHandler('clickBotInlineButton', (global, actions, payload): ActionRetur
   const {
     chatId, messageId, threadId, button, tabId = getCurrentTabId(),
   } = payload;
-  const chat = selectChat(global, chatId);
-  const message = selectChatMessage(global, chatId, messageId);
-  if (!chat || !message) {
-    return;
-  }
-
-  switch (button.type) {
-    case 'command':
-      actions.sendBotCommand({ command: button.text, tabId });
-      break;
-
+  if (isButtonUnsupported(button.action)) return;
+  switch (button.action.type) {
     case 'url': {
-      const { url } = button;
-      actions.openUrl({ url, tabId, linkContext: { type: 'message', chatId, messageId, threadId } });
-      break;
+      const { url } = button.action;
+      actions.openUrl({
+        url,
+        tabId,
+        linkContext: chatId && messageId !== undefined ? { type: 'message', chatId, messageId, threadId } : undefined,
+      });
+      return;
     }
 
     case 'copy': {
-      copyTextToClipboard(button.copyText);
-      actions.showNotification({ message: oldTranslate('ExactTextCopied', button.copyText), tabId });
-      break;
+      copyTextToClipboard(button.action.copyText);
+      actions.showNotification({ message: {
+        key: 'ExactTextCopied',
+        variables: {
+          text: button.action.copyText,
+        },
+        options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+      }, tabId });
+      return;
     }
 
+    case 'userProfile': {
+      const { userId } = button.action;
+      actions.openChatWithInfo({ id: userId, tabId });
+      return;
+    }
+  }
+  if (!chatId || messageId === undefined) return;
+  const chat = selectChat(global, chatId);
+  const message = selectChatMessageOrEphemeral(global, chatId, messageId);
+  if (!chat || !message) {
+    return;
+  }
+  if (message.isEphemeral && isKeyboardButtonUnsupportedForEphemeral(button)) return;
+
+  switch (button.action.type) {
+    case 'command':
+      actions.sendBotCommand({
+        command: button.text,
+        botId: message.ephemeralBotId || message.senderId,
+        tabId,
+      });
+      break;
+
     case 'callback': {
-      void answerCallbackButton(global, actions, chat, messageId, threadId, button.data, undefined, tabId);
+      void answerCallbackButton(global, {
+        chat,
+        messageId: message.ephemeralId || message.id,
+        threadId,
+        data: button.action.data,
+        isEphemeral: message.isEphemeral,
+      }, tabId);
       break;
     }
 
@@ -137,7 +174,22 @@ addActionHandler('clickBotInlineButton', (global, actions, payload): ActionRetur
         chatId,
         threadId,
         messageListType: 'thread',
-        isQuiz: button.isQuiz,
+        isQuiz: button.action.isQuiz,
+        tabId,
+      });
+      break;
+    }
+
+    case 'requestPeer': {
+      const { buttonId, maxQuantity, peerType } = button.action;
+      const botId = message.senderId || chatId;
+      actions.openRequestPeerModal({
+        botId,
+        chatId,
+        messageId: message.id,
+        buttonId,
+        maxQuantity,
+        peerType,
         tabId,
       });
       break;
@@ -164,15 +216,12 @@ addActionHandler('clickBotInlineButton', (global, actions, payload): ActionRetur
       break;
     }
 
-    case 'receipt': {
-      const { receiptMessageId } = button;
-      actions.getReceipt({
-        chatId: chat.id, messageId: receiptMessageId, tabId,
-      });
-      break;
-    }
-
     case 'buy': {
+      const receiptMessageId = message.content.invoice?.receiptMessageId;
+      if (receiptMessageId) {
+        actions.getReceipt({ chatId, messageId: receiptMessageId, tabId });
+        break;
+      }
       actions.openInvoice({
         type: 'message',
         chatId: chat.id,
@@ -183,26 +232,26 @@ addActionHandler('clickBotInlineButton', (global, actions, payload): ActionRetur
     }
 
     case 'game': {
-      void answerCallbackButton(global, actions, chat, messageId, threadId, undefined, true, tabId);
+      void answerCallbackButton(global, {
+        chat,
+        messageId,
+        threadId,
+        isGame: true,
+        isEphemeral: message.isEphemeral,
+      }, tabId);
       break;
     }
 
     case 'switchBotInline': {
-      const { query, isSamePeer } = button;
+      const { query, isSamePeer } = button.action;
       actions.switchBotInline({
         query, isSamePeer, messageId, tabId,
       });
       break;
     }
 
-    case 'userProfile': {
-      const { userId } = button;
-      actions.openChatWithInfo({ id: userId, tabId });
-      break;
-    }
-
     case 'simpleWebView': {
-      const { url } = button;
+      const { url } = button.action;
       const sender = selectSender(global, message);
       if (!sender) {
         return;
@@ -216,7 +265,7 @@ addActionHandler('clickBotInlineButton', (global, actions, payload): ActionRetur
     }
 
     case 'webView': {
-      const { url } = button;
+      const { url } = button.action;
       const sender = selectSender(global, message);
       const botId = message.viaBotId || sender?.id;
       if (!botId) {
@@ -235,11 +284,11 @@ addActionHandler('clickBotInlineButton', (global, actions, payload): ActionRetur
     }
 
     case 'urlAuth': {
-      const { url } = button;
+      const { url } = button.action;
       actions.requestBotUrlAuth({
         chatId: chat.id,
         messageId,
-        buttonId: button.buttonId,
+        buttonId: button.action.buttonId,
         url,
         tabId,
       });
@@ -249,7 +298,9 @@ addActionHandler('clickBotInlineButton', (global, actions, payload): ActionRetur
 });
 
 addActionHandler('sendBotCommand', (global, actions, payload): ActionReturnType => {
-  const { command, chatId, tabId = getCurrentTabId() } = payload;
+  const {
+    command, chatId, botId, tabId = getCurrentTabId(),
+  } = payload;
   const chat = chatId ? selectChat(global, chatId) : selectCurrentChat(global, tabId);
   const currentMessageList = selectCurrentMessageList(global, tabId);
 
@@ -258,13 +309,47 @@ addActionHandler('sendBotCommand', (global, actions, payload): ActionReturnType 
   }
 
   const { threadId } = currentMessageList;
+  const draftReplyInfo = selectDraft(global, chat.id, threadId)?.replyInfo;
   actions.resetDraftReplyInfo({ tabId });
   actions.clearWebPagePreview({ tabId });
 
   const lastMessageId = selectChatLastMessageId(global, chat.id);
+  const ephemeralCommand = draftReplyInfo?.type !== 'ephemeral'
+    ? resolveEphemeralCommand(global, { chat, commandText: command, botId }) : undefined;
+  if (ephemeralCommand) {
+    const receiver = selectUser(global, ephemeralCommand.botId);
+    if (receiver) {
+      const replyInfo = draftReplyInfo
+        ? selectMessageReplyInfo(global, chat.id, threadId, draftReplyInfo) : undefined;
+      void sendEphemeralMessages(global, {
+        chat,
+        receiver,
+        text: command,
+        replyInfo,
+        topMsgId: threadId !== MAIN_THREAD_ID ? Number(threadId) : undefined,
+      });
+    }
+    return;
+  }
+
+  if (draftReplyInfo?.type === 'ephemeral') {
+    const replyMessage = selectEphemeralMessage(global, chat.id, draftReplyInfo.replyToMsgId);
+    const receiver = replyMessage?.ephemeralBotId
+      ? selectUser(global, replyMessage.ephemeralBotId) : undefined;
+    if (receiver) {
+      void sendEphemeralMessages(global, {
+        chat,
+        receiver,
+        text: command,
+        replyInfo: draftReplyInfo,
+        topMsgId: replyMessage?.ephemeralTopMsgId,
+      });
+    }
+    return;
+  }
 
   void sendBotCommand(
-    chat, threadId, command, selectDraft(global, chat.id, threadId)?.replyInfo, selectSendAs(global, chat.id),
+    chat, threadId, command, draftReplyInfo, selectSendAs(global, chat.id),
     lastMessageId,
   );
 });
@@ -358,12 +443,12 @@ addActionHandler('switchBotInline', (global, actions, payload): ActionReturnType
   }
 
   if (!botId && messageId) {
-    const message = selectChatMessage(global, chat.id, messageId);
+    const message = selectChatMessageOrEphemeral(global, chat.id, messageId);
     if (!message) {
       return undefined;
     }
     const sender = selectSender(global, message);
-    botId = message.viaBotId || sender?.id;
+    botId = message.ephemeralBotId || message.viaBotId || sender?.id;
   }
 
   if (!botId) {
@@ -416,8 +501,10 @@ addActionHandler('sendInlineBotResult', async (global, actions, payload): Promis
 
   const chat = selectChat(global, chatId)!;
   const draftReplyInfo = selectDraft(global, chatId, threadId)?.replyInfo;
+  if (draftReplyInfo?.type === 'ephemeral') return;
 
   const replyInfo = selectMessageReplyInfo(global, chatId, threadId, draftReplyInfo);
+  if (replyInfo?.type === 'ephemeral') return;
 
   actions.resetDraftReplyInfo({ tabId });
   actions.clearWebPagePreview({ tabId });
@@ -433,6 +520,11 @@ addActionHandler('sendInlineBotResult', async (global, actions, payload): Promis
     scheduledAt,
     allowPaidStars: starsForOneMessage,
   };
+
+  if (!scheduledAt) {
+    actions.animateMessageSending({ chatId, threadId, tabId });
+  }
+
   if (!starsForOneMessage) {
     actions.sendInlineBotApiResult(params);
     return;
@@ -592,7 +684,7 @@ addActionHandler('requestSimpleWebView', async (global, actions, payload): Promi
     return;
   }
 
-  const webViewUrl = await callApi('requestSimpleWebView', {
+  const result = await callApi('requestSimpleWebView', {
     url,
     bot,
     theme,
@@ -600,9 +692,11 @@ addActionHandler('requestSimpleWebView', async (global, actions, payload): Promi
     isFromSideMenu,
     isFromSwitchWebView,
   });
-  if (!webViewUrl) {
+  if (!result) {
     return;
   }
+
+  const { url: webViewUrl, isSameOrigin } = result;
 
   global = getGlobal();
   const newActiveApp: WebApp = {
@@ -611,8 +705,9 @@ addActionHandler('requestSimpleWebView', async (global, actions, payload): Promi
     url: webViewUrl,
     botId,
     buttonText,
+    isSameOrigin,
   };
-  global = addWebAppToOpenList(global, newActiveApp, true, true, tabId);
+  global = addBrowserTabToOpenList(global, { type: 'webApp', webApp: newActiveApp }, true, true, tabId);
   setGlobal(global);
 });
 
@@ -648,7 +743,9 @@ addActionHandler('requestWebView', async (global, actions, payload): Promise<voi
 
   const { chatId, threadId = MAIN_THREAD_ID } = currentMessageList || {};
   const draftReplyInfo = chatId ? selectDraft(global, chatId, threadId)?.replyInfo : undefined;
-  const replyInfo = chatId ? selectMessageReplyInfo(global, chatId, threadId, draftReplyInfo) : undefined;
+  const replyInfo = chatId && draftReplyInfo?.type !== 'ephemeral'
+    ? selectMessageReplyInfo(global, chatId, threadId, draftReplyInfo) : undefined;
+  if (replyInfo?.type === 'ephemeral') return;
 
   const sendAs = chatId ? selectSendAs(global, chatId) : undefined;
   const result = await callApi('requestWebView', {
@@ -667,7 +764,9 @@ addActionHandler('requestWebView', async (global, actions, payload): Promise<voi
     return;
   }
 
-  const { url: webViewUrl, queryId, isFullScreen } = result;
+  const {
+    url: webViewUrl, queryId, isFullScreen, isSameOrigin,
+  } = result;
 
   global = getGlobal();
   const newActiveApp: WebApp = {
@@ -677,20 +776,21 @@ addActionHandler('requestWebView', async (global, actions, payload): Promise<voi
     botId,
     peerId,
     queryId,
+    isSameOrigin,
     replyInfo,
     buttonText,
   };
-  global = addWebAppToOpenList(global, newActiveApp, true, true, tabId);
+  global = addBrowserTabToOpenList(global, { type: 'webApp', webApp: newActiveApp }, true, true, tabId);
   setGlobal(global);
 
   if (isFullScreen && getIsWebAppsFullscreenSupported()) {
-    actions.changeWebAppModalState({ state: 'fullScreen', tabId });
+    actions.changeBrowserModalState({ state: 'fullScreen', tabId });
   }
 });
 
 addActionHandler('openChatInviteWebView', (global, actions, payload): ActionReturnType => {
   const {
-    botId, url, queryId, peerId, isFullscreen, isBroadcast,
+    botId, url, queryId, peerId, isFullscreen, isSameOrigin, isBroadcast,
     tabId = getCurrentTabId(),
   } = payload;
 
@@ -721,15 +821,16 @@ addActionHandler('openChatInviteWebView', (global, actions, payload): ActionRetu
     botId,
     peerId,
     queryId,
+    isSameOrigin,
     isJoinChat: true,
     isJoinChatBroadcast: isBroadcast,
     buttonText: '',
   };
-  global = addWebAppToOpenList(global, newActiveApp, true, true, tabId);
+  global = addBrowserTabToOpenList(global, { type: 'webApp', webApp: newActiveApp }, true, true, tabId);
   setGlobal(global);
 
   if (isFullscreen && getIsWebAppsFullscreenSupported()) {
-    actions.changeWebAppModalState({ state: 'fullScreen', tabId });
+    actions.changeBrowserModalState({ state: 'fullScreen', tabId });
   }
 });
 
@@ -828,7 +929,9 @@ addActionHandler('requestMainWebView', async (global, actions, payload): Promise
     return;
   }
 
-  const { url: webViewUrl, queryId, isFullscreen } = result;
+  const {
+    url: webViewUrl, queryId, isFullscreen, isSameOrigin,
+  } = result;
 
   global = getGlobal();
   const newActiveApp: WebApp = {
@@ -837,14 +940,15 @@ addActionHandler('requestMainWebView', async (global, actions, payload): Promise
     botId,
     peerId,
     queryId,
+    isSameOrigin,
     buttonText: '',
   };
-  global = addWebAppToOpenList(global, newActiveApp, true, true, tabId);
+  global = addBrowserTabToOpenList(global, { type: 'webApp', webApp: newActiveApp }, true, true, tabId);
   setGlobal(global);
   actions.bumpTopPeerRating({ category: 'botsApp', peerId: botId });
 
   if (isFullscreen && getIsWebAppsFullscreenSupported()) {
-    actions.changeWebAppModalState({ state: 'fullScreen', tabId });
+    actions.changeBrowserModalState({ state: 'fullScreen', tabId });
   }
 });
 
@@ -876,25 +980,25 @@ addActionHandler('loadPreviewMedias', async (global, actions, payload): Promise<
   }
 });
 
-addActionHandler('openWebAppsCloseConfirmationModal', (global, actions, payload): ActionReturnType => {
+addActionHandler('openBrowserCloseConfirmationModal', (global, actions, payload): ActionReturnType => {
   const {
     tabId = getCurrentTabId(),
   } = payload || {};
 
   return updateTabState(global, {
-    isWebAppsCloseConfirmationModalOpen: true,
+    isBrowserCloseConfirmationModalOpen: true,
   }, tabId);
 });
 
-addActionHandler('closeWebAppsCloseConfirmationModal', (global, actions, payload): ActionReturnType => {
+addActionHandler('closeBrowserCloseConfirmationModal', (global, actions, payload): ActionReturnType => {
   const { shouldSkipInFuture, tabId = getCurrentTabId() } = payload || {};
 
   global = updateSharedSettings(global, {
-    shouldSkipWebAppCloseConfirmation: Boolean(shouldSkipInFuture),
+    shouldSkipBrowserCloseConfirmation: Boolean(shouldSkipInFuture),
   });
 
   return updateTabState(global, {
-    isWebAppsCloseConfirmationModalOpen: undefined,
+    isBrowserCloseConfirmationModalOpen: undefined,
   }, tabId);
 });
 
@@ -947,7 +1051,10 @@ addActionHandler('requestAppWebView', async (global, actions, payload): Promise<
   global = getGlobal();
 
   if (!botApp) {
-    actions.showNotification({ message: oldTranslate('lng_username_app_not_found'), tabId });
+    actions.showNotification({ message: {
+      key: 'UsernameAppNotFound',
+      options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+    }, tabId });
     return;
   }
 
@@ -972,7 +1079,7 @@ addActionHandler('requestAppWebView', async (global, actions, payload): Promise<
 
   const peer = selectCurrentChat(global, tabId);
 
-  const { url, isFullscreen } = await callApi('requestAppWebView', {
+  const result = await callApi('requestAppWebView', {
     peer: peer || bot,
     app: botApp,
     startParam: startApp,
@@ -981,7 +1088,9 @@ addActionHandler('requestAppWebView', async (global, actions, payload): Promise<
     theme,
   });
 
-  if (!url) return;
+  if (!result) return;
+
+  const { url, isFullscreen, isSameOrigin } = result;
 
   global = getGlobal();
 
@@ -992,19 +1101,20 @@ addActionHandler('requestAppWebView', async (global, actions, payload): Promise<
     appName: appName && bot.firstName,
     peerId,
     botId,
+    isSameOrigin,
     buttonText: '',
   };
-  global = addWebAppToOpenList(global, newActiveApp, true, true, tabId);
+  global = addBrowserTabToOpenList(global, { type: 'webApp', webApp: newActiveApp }, true, true, tabId);
   setGlobal(global);
 
   if (isFullscreen && getIsWebAppsFullscreenSupported()) {
-    actions.changeWebAppModalState({ state: 'fullScreen', tabId });
+    actions.changeBrowserModalState({ state: 'fullScreen', tabId });
   }
 });
 
 addActionHandler('prolongWebView', async (global, actions, payload): Promise<void> => {
   const {
-    botId, peerId, isSilent, replyInfo, queryId, tabId = getCurrentTabId(),
+    key, botId, peerId, isSilent, replyInfo, queryId, tabId = getCurrentTabId(),
   } = payload;
 
   const bot = selectUser(global, botId);
@@ -1024,7 +1134,7 @@ addActionHandler('prolongWebView', async (global, actions, payload): Promise<voi
   });
 
   if (!result) {
-    actions.closeActiveWebApp({ tabId });
+    actions.closeBrowserTab({ key, skipClosingConfirmation: true, tabId });
   }
 });
 
@@ -1062,11 +1172,9 @@ addActionHandler('toggleAttachBot', async (global, actions, payload): Promise<vo
 export function isWepAppOpened<T extends GlobalState>(
   global: T, webApp: Partial<WebApp>, tabId: number,
 ) {
-  const currentTabState = selectTabState(global, tabId);
-  const openedWebApps = currentTabState.webApps.openedWebApps;
   const key = getWebAppKey(webApp);
   if (!key) return false;
-  return openedWebApps[key];
+  return Boolean(selectWebApp(global, key, tabId));
 }
 
 export function checkIfOpenOrActivate<T extends GlobalState>(
@@ -1076,7 +1184,7 @@ export function checkIfOpenOrActivate<T extends GlobalState>(
   if (isWepAppOpened(global, webAppForCheck, tabId)) {
     const key = getWebAppKey(webAppForCheck);
     if (key) {
-      global = activateWebAppIfOpen(global, key, tabId);
+      global = activateBrowserTabIfOpen(global, key, tabId);
       setGlobal(global);
     }
     return true;
@@ -1244,6 +1352,7 @@ addActionHandler('acceptBotUrlAuth', async (global, actions, payload): Promise<v
     isWriteAllowed,
     wasPhoneShared,
     matchCode: providedMatchCode || tabState.urlAuth.matchCode,
+    walletSessionId: tabState.urlAuth.request?.walletRequest?.sessionId,
   });
   if (!result) return;
   global = getGlobal();
@@ -1286,6 +1395,7 @@ addActionHandler('acceptLinkUrlAuth', async (global, actions, payload): Promise<
     isWriteAllowed,
     wasPhoneShared,
     matchCode: providedMatchCode || tabState.urlAuth.matchCode,
+    walletSessionId: tabState.urlAuth.request?.walletRequest?.sessionId,
   });
   if (!result) return;
   global = getGlobal();
@@ -1320,6 +1430,10 @@ addActionHandler('checkUrlAuthMatchCode', async (global, actions, payload): Prom
     },
   }, tabId);
   setGlobal(global);
+
+  if (tabState.urlAuth.request?.walletRequest) {
+    actions.openWalletTonConnectOauth({ tabId });
+  }
 });
 
 addActionHandler('declineUrlAuth', async (global, actions, payload): Promise<void> => {
@@ -1365,6 +1479,7 @@ function handleUrlAuthResult<T extends GlobalState>(
       urlAuth: {
         ...tabState.urlAuth,
         matchCode: undefined,
+        isWalletConnected: undefined,
         request: {
           ...request,
           botId: bot.id,
@@ -1372,6 +1487,13 @@ function handleUrlAuthResult<T extends GlobalState>(
       },
     }, tabId);
     setGlobal(global);
+
+    // A login that asks for the wallet starts with the wallet's connection screen, after the emoji code if any
+    const isMatchCodeFirst = Boolean(request.matchCodesFirst && request.matchCodes?.length);
+
+    if (request.walletRequest && !isMatchCodeFirst) {
+      actions.openWalletTonConnectOauth({ tabId });
+    }
     return;
   }
 
@@ -1484,20 +1606,35 @@ async function sendBotCommand(
 
 async function answerCallbackButton<T extends GlobalState>(
   global: T,
-  actions: RequiredGlobalActions, chat: ApiChat, messageId: number, threadId?: ThreadId, data?: string, isGame = false,
+  {
+    chat, messageId, threadId, data, isGame, isEphemeral,
+  }: {
+    chat: ApiChat;
+    messageId: number;
+    threadId?: ThreadId;
+    data?: string;
+    isGame?: true;
+    isEphemeral?: true;
+  },
   ...[tabId = getCurrentTabId()]: TabArgs<T>
 ) {
   const {
     showDialog, showNotification, openUrl, openGame,
-  } = actions;
+  } = getActions();
 
-  const result = await callApi('answerCallbackButton', {
-    chatId: chat.id,
-    accessHash: chat.accessHash,
-    messageId,
-    data,
-    isGame,
-  });
+  const result = isEphemeral
+    ? await callApi('answerEphemeralCallbackButton', {
+      chat,
+      messageId,
+      data,
+    })
+    : await callApi('answerCallbackButton', {
+      chatId: chat.id,
+      accessHash: chat.accessHash,
+      messageId,
+      data,
+      isGame,
+    });
 
   if (!result) {
     return;
@@ -1505,7 +1642,10 @@ async function answerCallbackButton<T extends GlobalState>(
   const { message, alert: isError, url } = result;
 
   if (isError) {
-    showDialog({ data: { type: 'error', message: message || 'Error' }, tabId });
+    showDialog({
+      data: message ? { type: 'error', message } : { type: 'localized', text: { key: 'ErrorUnspecified' } },
+      tabId,
+    });
   } else if (message) {
     showNotification({ message, tabId });
   } else if (url) {
@@ -1526,7 +1666,7 @@ addActionHandler('setBotInfo', async (global, actions, payload): Promise<void> =
   } = payload;
 
   let { langCode } = payload;
-  if (!langCode) langCode = selectSharedSettings(global).language;
+  if (!langCode) langCode = selectLanguageCode(global);
 
   const { currentUserId } = global;
   if (!currentUserId || !bot) {
@@ -1632,4 +1772,126 @@ addActionHandler('loadBotFreezeAppeal', async (global): Promise<void> => {
     botFreezeAppealId: chat?.id,
   };
   setGlobal(global);
+});
+
+addActionHandler('sendBotRequestedPeer', async (global, actions, payload): Promise<void> => {
+  const {
+    chatId, messageId, buttonId, requestedPeerIds,
+  } = payload;
+
+  const chat = selectChat(global, chatId);
+
+  const requestedPeers = requestedPeerIds
+    .map((peerId) => selectPeer(global, peerId))
+    .filter(Boolean);
+  if (!chat || requestedPeers.length !== requestedPeerIds.length) {
+    return;
+  }
+
+  await callApi('sendBotRequestedPeer', {
+    chat,
+    messageId,
+    buttonId,
+    requestedPeers,
+  });
+});
+
+addActionHandler('openBotCreationModal', async (global, actions, payload): Promise<void> => {
+  const {
+    managerUsername, suggestedName, suggestedUsername, tabId = getCurrentTabId(),
+  } = payload;
+
+  const { user: manager } = await callApi('getChatByUsername', managerUsername) || {};
+  if (!manager) {
+    actions.showNotification({ message: { key: 'NoUsernameFound' }, tabId });
+    return;
+  }
+
+  if (!manager.canManageBots) {
+    actions.showNotification({
+      message: {
+        key: 'CreateBotUnsupported',
+        variables: { bot: `@${managerUsername}` },
+        options: { withNodes: true, withMarkdown: true },
+      },
+      tabId,
+    });
+    return;
+  }
+
+  global = getGlobal();
+  if (selectTabState(global, tabId).botCreationModal) return;
+
+  global = updateUser(global, manager.id, manager);
+  global = updateTabState(global, {
+    botCreationModal: {
+      managerId: manager.id,
+      suggestedName,
+      suggestedUsername,
+    },
+  }, tabId);
+  setGlobal(global);
+});
+
+addActionHandler('createBot', async (global, actions, payload): Promise<void> => {
+  const { name, username, tabId = getCurrentTabId() } = payload;
+
+  const modal = selectTabState(global, tabId).botCreationModal;
+  const manager = modal && selectUser(global, modal.managerId);
+  if (!manager) return;
+
+  const result = await callApi('createBot', {
+    manager, name, username, isViaDeepLink: true,
+  });
+  if (!result) return;
+
+  global = getGlobal();
+  const isSameModal = selectTabState(global, tabId).botCreationModal === modal;
+
+  if ('error' in result) {
+    if (result.errorMessage === 'BOT_CREATE_LIMIT_EXCEEDED') {
+      const limit = selectCurrentLimit(global, 'botsCreate');
+      const isPremium = selectIsCurrentUserPremium(global);
+      actions.showNotification({
+        title: { key: 'CreateBotLimitTitle' },
+        message: isPremium ? {
+          key: 'CreateBotLimitText', variables: { count: limit }, options: { pluralValue: limit },
+        } : {
+          key: 'CreateBotLimitTextPremium',
+          variables: { limit, premiumLimit: selectPremiumLimit(global, 'botsCreate') },
+          options: { withNodes: true, withMarkdown: true },
+        },
+        action: isPremium ? undefined : { action: 'openPremiumModal', payload: { tabId } },
+        actionText: isPremium ? undefined : { key: 'PremiumMore' },
+        tabId,
+      });
+      return;
+    }
+
+    if (result.errorMessage === 'USERNAME_OCCUPIED' && isSameModal) {
+      global = updateTabState(global, { botCreationModal: { ...modal, occupiedUsername: username } }, tabId);
+      setGlobal(global);
+      return;
+    }
+
+    actions.showNotification({ message: result.messageKey, tabId });
+    return;
+  }
+
+  global = updateUser(global, result.id, result);
+  setGlobal(global);
+
+  if (isSameModal) actions.closeBotCreationModal({ tabId });
+  actions.openChat({ id: result.id, tabId });
+
+  const lang = getTranslationFn();
+  actions.showNotification({
+    title: { key: 'CreateBotCreatedTitle', variables: { name: getUserFullName(lang, result) } },
+    message: {
+      key: 'CreateBotCreatedText',
+      variables: { bot: getUserFullName(lang, manager) },
+      options: { withNodes: true, withMarkdown: true },
+    },
+    tabId,
+  });
 });

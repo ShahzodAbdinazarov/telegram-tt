@@ -1,4 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useCallback, useEffect, useMemo, useState,
 } from '../../../lib/teact/teact';
@@ -21,7 +20,6 @@ import { getPrivacyKey } from './helpers/privacy';
 import { useFolderManagerForOrderedIds } from '../../../hooks/useFolderManager';
 import useHistoryBack from '../../../hooks/useHistoryBack';
 import useLang from '../../../hooks/useLang';
-import useOldLang from '../../../hooks/useOldLang';
 
 import PeerPicker from '../../common/pickers/PeerPicker';
 import FloatingActionButton from '../../ui/FloatingActionButton';
@@ -43,7 +41,7 @@ type StateProps = {
 
 const PREMIUM_CATEGORY = [CUSTOM_PEER_PREMIUM];
 
-const SettingsPrivacyVisibilityExceptionList: FC<OwnProps & StateProps> = ({
+const SettingsPrivacyVisibilityExceptionList = ({
   isAllowList,
   withPremiumCategory,
   withMiniAppsCategory,
@@ -53,10 +51,9 @@ const SettingsPrivacyVisibilityExceptionList: FC<OwnProps & StateProps> = ({
   settings,
   usersOnly = false,
   onReset,
-}) => {
+}: OwnProps & StateProps) => {
   const { setPrivacySettings } = getActions();
 
-  const oldLang = useOldLang();
   const lang = useLang();
 
   const customPeerBots: UniqueCustomPeer = useMemo(() => {
@@ -190,7 +187,7 @@ const SettingsPrivacyVisibilityExceptionList: FC<OwnProps & StateProps> = ({
         selectedIds={newSelectedContactIds}
         selectedCategories={newSelectedCategoryTypes}
         filterValue={searchQuery}
-        filterPlaceholder={isAllowList ? oldLang('AlwaysAllowPlaceholder') : oldLang('NeverAllowPlaceholder')}
+        filterPlaceholder={isAllowList ? lang('AlwaysAllowPlaceholder') : lang('NeverAllowPlaceholder')}
         categoryPlaceholderKey="PrivacyUserTypes"
         searchInputId="new-group-picker-search"
         isSearchable
@@ -207,7 +204,7 @@ const SettingsPrivacyVisibilityExceptionList: FC<OwnProps & StateProps> = ({
       <FloatingActionButton
         isShown={isSubmitShown}
         onClick={handleSubmit}
-        ariaLabel={isAllowList ? oldLang('AlwaysAllow') : oldLang('NeverAllow')}
+        ariaLabel={isAllowList ? lang('AlwaysAllow') : lang('NeverAllow')}
         iconName="check"
       />
     </div>
@@ -235,6 +232,9 @@ function getCurrentPrivacySettings(global: GlobalState, screen: SettingsScreens)
     case SettingsScreens.PrivacyGiftsAllowedContacts:
     case SettingsScreens.PrivacyGiftsDeniedContacts:
       return privacy.gifts;
+    case SettingsScreens.PrivacySavedMusicAllowedContacts:
+    case SettingsScreens.PrivacySavedMusicDeniedContacts:
+      return privacy.savedMusic;
     case SettingsScreens.PrivacyPhoneCallAllowedContacts:
     case SettingsScreens.PrivacyPhoneCallDeniedContacts:
       return privacy.phoneCall;

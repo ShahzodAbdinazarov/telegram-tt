@@ -6,10 +6,9 @@ import type { PrivacyVisibility } from '../../../api/types';
 import { selectIsCurrentUserPremium, selectShouldHideReadMarks } from '../../../global/selectors';
 import renderText from '../../common/helpers/renderText';
 
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
-import StarIcon from '../../common/icons/StarIcon';
 import Island, { IslandDescription } from '../../gili/layout/Island';
 import Checkbox from '../../ui/Checkbox';
 import ListItem from '../../ui/ListItem';
@@ -27,7 +26,7 @@ const SettingsPrivacyLastSeen = ({
   isCurrentUserPremium, shouldHideReadMarks, visibility,
 }: OwnProps & StateProps) => {
   const { updateGlobalPrivacySettings, openPremiumModal } = getActions();
-  const lang = useOldLang();
+  const lang = useLang();
   const canShowHideReadTime = visibility === 'nobody' || visibility === 'contacts';
 
   const handleChangeShouldHideReadMarks = useLastCallback(
@@ -58,7 +57,8 @@ const SettingsPrivacyLastSeen = ({
       )}
       <Island>
         <ListItem
-          leftElement={<StarIcon className="icon ListItem-main-icon" type="premium" size="big" />}
+          icon="star"
+          iconBg="premium"
           onClick={handleOpenPremiumModal}
         >
           {isCurrentUserPremium ? lang('PrivacyLastSeenPremiumForPremium') : lang('PrivacyLastSeenPremium')}

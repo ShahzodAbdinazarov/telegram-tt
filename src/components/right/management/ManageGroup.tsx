@@ -1,5 +1,3 @@
-import type { ChangeEvent } from 'react';
-import type { FC } from '../../../lib/teact/teact';
 import {
   memo, useEffect, useMemo, useRef, useState,
 } from '../../../lib/teact/teact';
@@ -17,16 +15,18 @@ import {
   isChatBasicGroup,
   isChatPublic,
 } from '../../../global/helpers';
-import { selectChat, selectChatFullInfo, selectIsChatRestricted, selectTabState } from '../../../global/selectors';
+import {
+  selectCanBanUsers, selectChat, selectChatFullInfo, selectIsChatRestricted, selectTabState,
+} from '../../../global/selectors';
 import { debounce } from '../../../util/schedulers';
 import { formatInteger } from '../../../util/textFormat';
 import renderText from '../../common/helpers/renderText';
 
 import useFlag from '../../../hooks/useFlag';
 import useHistoryBack from '../../../hooks/useHistoryBack';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
 import useMedia from '../../../hooks/useMedia';
-import useOldLang from '../../../hooks/useOldLang';
 
 import Island, { IslandDescription } from '../../gili/layout/Island';
 import Switch from '../../gili/primitives/Switch';
@@ -62,7 +62,7 @@ type StateProps = {
   availableReactions?: ApiAvailableReaction[];
 };
 
-const GROUP_TITLE_EMPTY = 'Group title can\'t be empty';
+const GROUP_TITLE_EMPTY = 'GroupTitleEmptyError';
 const GROUP_MAX_DESCRIPTION = 255;
 
 const ALL_PERMISSIONS: Array<keyof ApiChatBannedRights> = [
@@ -86,7 +86,7 @@ const TOTAL_PERMISSIONS_COUNT = ALL_PERMISSIONS.length + 1;
 
 const runDebounced = debounce((cb) => cb(), 500, false);
 
-const ManageGroup: FC<OwnProps & StateProps> = ({
+const ManageGroup = ({
   chatId,
   chat,
   chatFullInfo,
@@ -103,7 +103,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   availableReactions,
   onScreenSelect,
   onClose,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     togglePreHistoryHidden,
     updateChat,
@@ -130,7 +130,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   const imageHash = getChatAvatarHash(chat);
   const currentAvatarBlobUrl = useMedia(imageHash, false, ApiMediaFormat.BlobUrl);
   const isPublicGroup = useMemo(() => isChatPublic(chat), [chat]);
-  const lang = useOldLang();
+  const lang = useLang();
   const isPreHistoryHiddenCheckboxRef = useRef<HTMLDivElement>();
 
   useHistoryBack({
@@ -191,12 +191,12 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
     setIsProfileFieldsTouched(true);
   });
 
-  const handleTitleChange = useLastCallback((e: ChangeEvent<HTMLInputElement>) => {
+  const handleTitleChange = useLastCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setTitle(e.target.value);
     setIsProfileFieldsTouched(true);
   });
 
-  const handleAboutChange = useLastCallback((e: ChangeEvent<HTMLTextAreaElement>) => {
+  const handleAboutChange = useLastCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setAbout(e.target.value);
     setIsProfileFieldsTouched(true);
   });
@@ -301,7 +301,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
   const handleDeleteGroup = useLastCallback(() => {
     if (isBasicGroup) {
       deleteChat({ chatId: chat.id });
-    } else if (!chat.isCreator) {
+    } else if (!chat.isOwner) {
       leaveChannel({ chatId: chat.id });
     } else {
       deleteChannel({ chatId: chat.id });
@@ -334,7 +334,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               label={lang('GroupName')}
               onChange={handleTitleChange}
               value={title}
-              error={error === GROUP_TITLE_EMPTY ? error : undefined}
+              error={error === GROUP_TITLE_EMPTY ? lang(GROUP_TITLE_EMPTY) : undefined}
               disabled={!canChangeInfo}
             />
             <TextArea
@@ -348,7 +348,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               noReplaceNewlines
             />
           </div>
-          {chat.isCreator && (
+          {chat.isOwner && (
             <ListItem icon="lock" multiline onClick={handleClickEditType}>
               <span className="title">{lang('GroupType')}</span>
               <span className="subtitle">{isPublicGroup ? lang('TypePublic') : lang('TypePrivate')}</span>
@@ -403,7 +403,7 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
               multiline
               disabled={!exportedInvites}
             >
-              <span className="title">{lang('GroupInfo.InviteLinks')}</span>
+              <span className="title">{lang('GroupInfoInviteLinks')}</span>
               <span className="subtitle">
                 {exportedInvites ? formatInteger(exportedInvites.length) : lang('Loading')}
               </span>
@@ -473,12 +473,12 @@ const ManageGroup: FC<OwnProps & StateProps> = ({
         isOpen={isDeleteDialogOpen}
         onClose={closeDeleteDialog}
         textParts={renderText(
-          isBasicGroup || !chat.isCreator
+          isBasicGroup || !chat.isOwner
             ? lang('AreYouSureDeleteAndExit')
-            : lang('AreYouSureDeleteThisChatWithGroup', chat.title),
+            : lang('AreYouSureDeleteThisChatWithGroup', { chat: chat.title }),
           ['br', 'simple_markdown'],
         )}
-        confirmLabel={isBasicGroup || !chat.isCreator ? lang('DeleteMega') : lang('DeleteGroupForAll')}
+        confirmLabel={isBasicGroup || !chat.isOwner ? lang('DeleteMega') : lang('DeleteGroupForAll')}
         confirmHandler={handleDeleteGroup}
         confirmIsDestructive
       />
@@ -495,10 +495,10 @@ export default memo(withGlobal<OwnProps>(
     const hasLinkedChannel = Boolean(chatFullInfo?.linkedChatId);
     const isBasicGroup = isChatBasicGroup(chat);
     const { invites } = management.byChatId[chatId] || {};
-    const canEditForum = !hasLinkedChannel && (getHasAdminRight(chat, 'changeInfo') || chat.isCreator);
-    const canChangeInfo = chat.isCreator || getHasAdminRight(chat, 'changeInfo');
-    const canBanUsers = chat.isCreator || getHasAdminRight(chat, 'banUsers');
-    const canInvite = chat.isCreator || getHasAdminRight(chat, 'inviteUsers');
+    const canEditForum = !hasLinkedChannel && getHasAdminRight(chat, 'changeInfo');
+    const canChangeInfo = getHasAdminRight(chat, 'changeInfo');
+    const canBanUsers = selectCanBanUsers(global, chatId);
+    const canInvite = getHasAdminRight(chat, 'inviteUsers');
 
     return {
       chat,

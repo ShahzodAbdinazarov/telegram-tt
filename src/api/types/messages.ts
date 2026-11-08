@@ -4,13 +4,15 @@ import type {
   ApiBotInlineResult,
   ApiWebDocument,
 } from './bots';
-import type { ApiInstantViewPage, ApiPageBlock } from './instantView';
+import type { ApiChatAdminRights } from './chats';
+import type { ApiInstantViewPage } from './instantView';
 import type { ApiMessageAction } from './messageActions';
 import type { ApiAttachment, ApiPeerNotifySettings, ApiRestrictionReason } from './misc';
 import type {
   ApiLabeledPrice,
 } from './payments';
 import type { ApiTypePeerColor } from './peers';
+import type { ApiRichMessage } from './richMessage';
 import type { ApiStarGiftRegular, ApiStarGiftUnique, ApiTypeCurrencyAmount } from './stars';
 import type {
   ApiMessageStoryData, ApiStory, ApiWebPageStickerData, ApiWebPageStoryData,
@@ -85,6 +87,7 @@ export interface ApiStickerSet {
   hasStaticThumb?: boolean;
   hasAnimatedThumb?: boolean;
   hasVideoThumb?: boolean;
+  thumbnail?: ApiThumbnail;
   thumbCustomEmojiId?: string;
   count: number;
   stickers?: ApiSticker[];
@@ -248,6 +251,8 @@ export interface ApiMessagePoll {
 export interface ApiInvoice {
   prices: ApiLabeledPrice[];
   totalAmount: number;
+  // Set for an invoice in Stars or TON. TON is counted in nanotons, which `totalAmount` cannot hold exactly.
+  totalPrice?: ApiTypeCurrencyAmount;
   currency: string;
   isTest?: boolean;
   isRecurring?: boolean;
@@ -439,6 +444,7 @@ export interface ApiWebPageFull {
   auction?: ApiWebPageAuctionData;
   stickers?: ApiWebPageStickerData;
   cachedPage?: ApiInstantViewPage;
+  cachedPageAudioById?: Record<string, ApiAudio>;
   aiComposeToneEmojiId?: string;
   hasLargeMedia?: boolean;
 }
@@ -459,7 +465,7 @@ export interface ApiMessageWebPage {
   mediaSize?: WebPageMediaSize;
 }
 
-export type ApiReplyInfo = ApiMessageReplyInfo | ApiStoryReplyInfo;
+export type ApiReplyInfo = ApiMessageReplyInfo | ApiEphemeralReplyInfo | ApiStoryReplyInfo;
 
 export interface ApiMessageReplyInfo {
   type: 'message';
@@ -472,6 +478,11 @@ export interface ApiMessageReplyInfo {
   isQuote?: true;
   quoteText?: ApiFormattedText;
   quoteOffset?: number;
+}
+
+export interface ApiEphemeralReplyInfo {
+  type: 'ephemeral';
+  replyToMsgId: number;
 }
 
 export interface ApiStoryReplyInfo {
@@ -488,6 +499,11 @@ export interface ApiInputMessageReplyInfo {
   monoforumPeerId?: string;
   quoteText?: ApiFormattedText;
   quoteOffset?: number;
+}
+
+export interface ApiInputEphemeralReplyInfo {
+  type: 'ephemeral';
+  replyToMsgId: number;
 }
 
 export interface ApiSuggestedPost {
@@ -510,7 +526,8 @@ export interface ApiInputSuggestedPostInfo {
   isRejected?: true;
 }
 
-export type ApiInputReplyInfo = ApiInputMessageReplyInfo | ApiInputStoryReplyInfo;
+export type ApiInputDraftReplyInfo = ApiInputMessageReplyInfo | ApiInputEphemeralReplyInfo;
+export type ApiInputReplyInfo = ApiInputDraftReplyInfo | ApiInputStoryReplyInfo;
 
 export interface ApiMessageForwardInfo {
   date: number;
@@ -652,6 +669,7 @@ export enum ApiMessageEntityTypes {
   DiffInsert = 'MessageEntityDiffInsert',
   DiffReplace = 'MessageEntityDiffReplace',
   DiffDelete = 'MessageEntityDiffDelete',
+  TonAddress = 'MessageEntityTonAddress',
 }
 
 export interface ApiFormattedText {
@@ -661,13 +679,6 @@ export interface ApiFormattedText {
 
 export interface ApiFormattedTextWithEmojiOnlyCount extends ApiFormattedText {
   emojiOnlyCount?: number;
-}
-
-export interface ApiRichMessage {
-  blocks: ApiPageBlock[];
-  isRtl?: true;
-  isPart?: true;
-  partCutoff?: number;
 }
 
 export type ApiInputAiComposeTone = {
@@ -680,6 +691,9 @@ export type ApiInputAiComposeTone = {
 } | {
   type: 'slug';
   slug: string;
+} | {
+  type: 'singleUse';
+  customPrompt: string;
 };
 
 export interface ApiAiComposeToneExample {
@@ -759,10 +773,18 @@ export type BoughtPaidMedia = Pick<MediaContent, 'photo' | 'video'>;
 
 export interface ApiMessage {
   id: number;
+  ephemeralBotId?: string;
+  ephemeralId?: number;
+  ephemeralReceiverId?: string;
+  anchorMsgId?: number;
+  ephemeralRandomId?: string;
+  ephemeralTopMsgId?: number;
+  isEphemeral?: true;
   chatId: string;
   content: MediaContent;
   date: number;
   isOutgoing: boolean;
+  ttlPeriod?: number;
   senderId?: string;
   replyInfo?: ApiReplyInfo;
   suggestedPostInfo?: ApiInputSuggestedPostInfo;
@@ -822,6 +844,11 @@ export interface ApiMessage {
   fromRank?: string;
 
   isTypingDraft?: boolean; // Local field
+  typingDraft?: {
+    canStop?: true;
+    shouldKeepOnStop?: true;
+  }; // Local field
+  shouldSkipTypingAnimation?: true; // Local field
   wasTypingDraft?: boolean; // Local field
 }
 
@@ -1002,117 +1029,63 @@ export interface ApiKeyboardButtonStyle {
   iconId?: string;
 }
 
-export interface ApiKeyboardButtonBase {
+export type ApiRequestPeerType = {
+  type: 'user';
+  isBot?: boolean;
+  isPremium?: boolean;
+} | {
+  type: 'group';
+  isCreator?: boolean;
+  isBotParticipant?: boolean;
+  hasUsername?: boolean;
+  isForum?: boolean;
+  userAdminRights?: ApiChatAdminRights;
+  botAdminRights?: ApiChatAdminRights;
+} | {
+  type: 'channel';
+  isCreator?: boolean;
+  hasUsername?: boolean;
+  userAdminRights?: ApiChatAdminRights;
+  botAdminRights?: ApiChatAdminRights;
+};
+
+export type ApiReplyButtonAction =
+  { type: 'command' | 'requestPhone' | 'unsupported' }
+  | { type: 'requestPoll'; isQuiz?: boolean }
+  | { type: 'requestPeer'; buttonId: number; maxQuantity: number; peerType: ApiRequestPeerType }
+  | { type: 'simpleWebView'; url: string };
+
+export type ApiInlineButtonAction =
+  { type: 'buy' | 'game' | 'disabled' | 'unsupported' }
+  | { type: 'url'; url: string }
+  | { type: 'webView'; url: string }
+  | { type: 'callback'; data: string; requiresPassword?: boolean }
+  | { type: 'switchBotInline'; query: string; isSamePeer?: boolean; peerTypes?: ApiInlineQueryPeerType[] }
+  | { type: 'userProfile'; userId: string }
+  | { type: 'urlAuth'; url: string; buttonId: number; forwardText?: string }
+  | { type: 'copy'; copyText: string };
+
+export type ApiLocalButtonAction =
+  { type: 'suggestedMessage'; buttonType: 'approve' | 'decline' | 'suggestChanges'; disabled?: boolean }
+  | { type: 'openThread' }
+  | { type: 'giftOffer'; buttonType: 'accept' | 'reject' }
+  | { type: 'noForwardsRequest'; buttonType: 'accept' | 'reject' };
+
+export type ApiKeyboardButton = {
+  text: string;
   style?: ApiKeyboardButtonStyle;
-}
+  action: ApiReplyButtonAction | ApiInlineButtonAction | ApiLocalButtonAction;
+};
 
-interface ApiKeyboardButtonSimple extends ApiKeyboardButtonBase {
-  type: 'unsupported' | 'buy' | 'command' | 'requestPhone' | 'game';
-  text: string;
-}
-
-interface ApiKeyboardButtonReceipt extends ApiKeyboardButtonBase {
-  type: 'receipt';
-  receiptMessageId: number;
-}
-
-interface ApiKeyboardButtonUrl extends ApiKeyboardButtonBase {
-  type: 'url';
-  text: string;
-  url: string;
-}
-
-interface ApiKeyboardButtonSimpleWebView extends ApiKeyboardButtonBase {
-  type: 'simpleWebView';
-  text: string;
-  url: string;
-}
-
-interface ApiKeyboardButtonWebView extends ApiKeyboardButtonBase {
-  type: 'webView';
-  text: string;
-  url: string;
-}
-
-interface ApiKeyboardButtonCallback extends ApiKeyboardButtonBase {
-  type: 'callback';
-  text: string;
-  data: string;
-}
-
-interface ApiKeyboardButtonRequestPoll extends ApiKeyboardButtonBase {
-  type: 'requestPoll';
-  text: string;
-  isQuiz?: boolean;
-}
-
-interface ApiKeyboardButtonSwitchBotInline extends ApiKeyboardButtonBase {
-  type: 'switchBotInline';
-  text: string;
-  query: string;
-  isSamePeer?: boolean;
-}
-
-interface ApiKeyboardButtonUserProfile extends ApiKeyboardButtonBase {
-  type: 'userProfile';
-  text: string;
-  userId: string;
-}
-
-interface ApiKeyboardButtonUrlAuth extends ApiKeyboardButtonBase {
-  type: 'urlAuth';
-  text: string;
-  url: string;
-  buttonId: number;
-}
-
-interface ApiKeyboardButtonCopy extends ApiKeyboardButtonBase {
-  type: 'copy';
-  text: string;
-  copyText: string;
-}
-
-export interface KeyboardButtonSuggestedMessage extends ApiKeyboardButtonBase {
-  type: 'suggestedMessage';
-  text: string;
-  buttonType: 'approve' | 'decline' | 'suggestChanges';
-  disabled?: boolean;
-}
-
-export interface KeyboardButtonOpenThread extends ApiKeyboardButtonBase {
-  type: 'openThread';
-  text: string;
-}
-
-export interface KeyboardButtonGiftOffer extends ApiKeyboardButtonBase {
-  type: 'giftOffer';
-  text: string;
-  buttonType: 'accept' | 'reject';
-}
-
-export interface KeyboardButtonNoForwardsRequest extends ApiKeyboardButtonBase {
-  type: 'noForwardsRequest';
-  text: string;
-  buttonType: 'accept' | 'reject';
-}
-
-export type ApiKeyboardButton = (
-  ApiKeyboardButtonSimple
-  | ApiKeyboardButtonReceipt
-  | ApiKeyboardButtonUrl
-  | ApiKeyboardButtonCallback
-  | ApiKeyboardButtonRequestPoll
-  | ApiKeyboardButtonSwitchBotInline
-  | ApiKeyboardButtonUserProfile
-  | ApiKeyboardButtonWebView
-  | ApiKeyboardButtonSimpleWebView
-  | ApiKeyboardButtonUrlAuth
-  | ApiKeyboardButtonCopy
-  | KeyboardButtonSuggestedMessage
-  | KeyboardButtonOpenThread
-  | KeyboardButtonGiftOffer
-  | KeyboardButtonNoForwardsRequest
-);
+export type KeyboardButtonSuggestedMessage = ApiKeyboardButton & {
+  action: Extract<ApiLocalButtonAction, { type: 'suggestedMessage' }>;
+};
+export type KeyboardButtonGiftOffer = ApiKeyboardButton & {
+  action: Extract<ApiLocalButtonAction, { type: 'giftOffer' }>;
+};
+export type KeyboardButtonNoForwardsRequest = ApiKeyboardButton & {
+  action: Extract<ApiLocalButtonAction, { type: 'noForwardsRequest' }>;
+};
 
 export type ApiKeyboardButtons = ApiKeyboardButton[][];
 export type ApiReplyKeyboard = {
@@ -1128,7 +1101,7 @@ export type ApiTranscription = {
 };
 
 export type ApiMessageSearchType = 'text' | 'media' | 'documents' | 'links' | 'audio' | 'voice' | 'gif'
-  | 'profilePhoto';
+  | 'polls' | 'profilePhoto';
 export type ApiGlobalMessageSearchType = 'text' |
   'channels' | 'media' | 'documents' | 'links' | 'audio' | 'voice' | 'publicPosts';
 export type ApiMessageSearchContext = 'all' | 'users' | 'groups' | 'channels';
@@ -1137,7 +1110,10 @@ export type ApiReportReason = 'spam' | 'violence' | 'pornography' | 'childAbuse'
   | 'copyright' | 'geoIrrelevant' | 'fake' | 'illegalDrugs' | 'personalDetails' | 'other';
 
 export type ApiSendMessageAction = {
-  type: 'cancel' | 'typing' | 'recordAudio' | 'chooseSticker' | 'playingGame';
+  type: 'cancel' | 'typing' | 'recordAudio' | 'recordRound' | 'chooseSticker' | 'playingGame';
+} | {
+  type: 'stopDraft';
+  randomId: string;
 };
 
 export type ApiThemeParameters = {

@@ -19,15 +19,15 @@ import {
 } from '../../../global/helpers';
 import { getMediaContentTypeDescription } from '../../../global/helpers/messageSummary';
 import { getPeerTitle } from '../../../global/helpers/peers';
+import { getRichMessagePreviewText } from '../../../global/helpers/richMessage';
 import buildClassName from '../../../util/buildClassName';
-import { formatScheduledDateTime } from '../../../util/dates/oldDateFormat';
 import { isUserId } from '../../../util/entities/ids';
+import { formatCalendarDate, secondsToDate } from '../../../util/localization/dateFormat';
 import { formatStarsAsIcon, formatTonAsIcon } from '../../../util/localization/format';
 import renderText from '../helpers/renderText';
 import { renderTextWithEntities } from '../helpers/renderTextWithEntities';
 
 import useLang from '../../../hooks/useLang';
-import useOldLang from '../../../hooks/useOldLang';
 import useMessageTranslation from '../../middle/message/hooks/useMessageTranslation';
 
 import RippleEffect from '../../ui/RippleEffect';
@@ -61,7 +61,7 @@ type OwnProps = {
   pictogramActionIcon?: IconName;
   observeIntersectionForLoading?: ObserveFn;
   observeIntersectionForPlaying?: ObserveFn;
-  onClick: ((e: React.MouseEvent) => void);
+  onClick?: ((e: React.MouseEvent) => void);
   onPictogramClick?: ((e: React.MouseEvent) => void);
 };
 
@@ -111,15 +111,17 @@ const EmbeddedMessage = ({
   const replyForwardInfo = replyInfo?.type === 'message' ? replyInfo.replyFrom : undefined;
 
   const shouldTranslate = message && isMessageTranslatable(message);
-  const { translatedText } = useMessageTranslation(
+  const { translatedText, translatedRichMessage } = useMessageTranslation(
     chatTranslations, message?.chatId, shouldTranslate ? message?.id : undefined,
     requestedChatTranslationLanguage, requestedChatTranslationTone,
   );
+  const translatedPreview = useMemo(() => translatedRichMessage
+    ? { text: getRichMessagePreviewText(translatedRichMessage) } : translatedText,
+  [translatedRichMessage, translatedText]);
 
-  const oldLang = useOldLang();
   const lang = useLang();
 
-  const senderTitle = sender ? getPeerTitle(oldLang, sender)
+  const senderTitle = sender ? getPeerTitle(lang, sender)
     : (replyForwardInfo?.hiddenUserName || message?.forwardInfo?.hiddenUserName);
 
   const forwardSendersTitle = useMemo(() => {
@@ -129,8 +131,8 @@ const EmbeddedMessage = ({
     return lang.conjunction(peerTitles);
   }, [composerForwardSenders, lang]);
 
-  const senderChatTitle = senderChat ? getPeerTitle(oldLang, senderChat) : undefined;
-  const forwardSenderTitle = forwardSender ? getPeerTitle(oldLang, forwardSender)
+  const senderChatTitle = senderChat ? getPeerTitle(lang, senderChat) : undefined;
+  const forwardSenderTitle = forwardSender ? getPeerTitle(lang, forwardSender)
     : message?.forwardInfo?.hiddenUserName;
   const areSendersSame = sender && sender.id === forwardSender?.id;
 
@@ -144,14 +146,13 @@ const EmbeddedMessage = ({
         ? (suggestedPostInfo.price.currency === TON_CURRENCY_CODE
           ? formatTonAsIcon(lang, suggestedPostInfo.price.amount, {
             className: 'suggested-price-ton-icon',
-            shouldConvertFromNanos: true,
           })
           : formatStarsAsIcon(lang, suggestedPostInfo.price.amount, {
             className: 'suggested-price-star-icon',
           }))
         : '';
       const scheduleText = suggestedPostInfo.scheduleDate
-        ? formatScheduledDateTime(suggestedPostInfo.scheduleDate, lang, oldLang)
+        ? formatCalendarDate(lang, secondsToDate(suggestedPostInfo.scheduleDate), { isShort: true, withTime: true })
         : '';
       if (priceText && !scheduleText) {
         return (
@@ -196,7 +197,7 @@ const EmbeddedMessage = ({
       <MessageSummary
         message={message}
         noEmoji={hasPictogram}
-        forcedText={translatedText}
+        forcedText={translatedPreview}
         observeIntersectionForLoading={observeIntersectionForLoading}
         observeIntersectionForPlaying={observeIntersectionForPlaying}
         emojiSize={EMOJI_SIZE}
@@ -235,13 +236,19 @@ const EmbeddedMessage = ({
     }
 
     if (!senderTitle && !forwardSendersTitle) {
-      return NBSP;
+      // Keep the sender subtree structure stable while the peer is still loading — replacing
+      // a bare text node with an element subtree later makes WebKit shift `scrollTop`
+      return (
+        <span className="embedded-sender-wrapper">
+          <span className="embedded-sender">{NBSP}</span>
+        </span>
+      );
     }
 
     let icon: IconName | undefined;
     if (senderChat) {
       if (isChatChannel(senderChat)) {
-        icon = 'channel-filled';
+        icon = 'megaphone-filled';
       }
 
       if (isChatGroup(senderChat)) {
@@ -256,7 +263,7 @@ const EmbeddedMessage = ({
         {checkShouldRenderSenderTitle() && (
           <span className="embedded-sender">
             {!composerForwardSenders && senderTitle
-              && renderText(isReplyToQuote ? oldLang('ReplyToQuote', senderTitle) : senderTitle)}
+              && renderText(isReplyToQuote ? lang('ReplyToQuote', { senderTitle }) : senderTitle)}
             {forwardSendersTitle && renderText(lang('ComposerTitleForwardFrom', {
               users: forwardSendersTitle,
             }, {

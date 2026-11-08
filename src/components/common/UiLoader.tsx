@@ -1,5 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
-import type React from '../../lib/teact/teact';
 import { getActions, getGlobal, withGlobal } from '../../global';
 
 import type { TabState } from '../../global/types';
@@ -29,6 +27,8 @@ import lockPreviewPath from '../../assets/lock.png';
 import monkeyPath from '../../assets/monkey.svg';
 import spoilerMaskPath from '../../assets/spoilers/mask.svg';
 import telegramLogoPath from '../../assets/telegram-logo.svg';
+import pausePreviewPath from '../../assets/tgs-previews/Pause.svg';
+import playPreviewPath from '../../assets/tgs-previews/Play.svg';
 
 export type UiLoaderPage =
   'main'
@@ -46,6 +46,7 @@ type OwnProps = {
 };
 
 type StateProps = Pick<TabState, 'uiReadyState' | 'shouldSkipHistoryAnimations'> & {
+  hasCachedChats: boolean;
   isRightColumnShown?: boolean;
   leftColumnWidth?: number;
   isFoldersSidebarShown?: boolean;
@@ -54,6 +55,18 @@ type StateProps = Pick<TabState, 'uiReadyState' | 'shouldSkipHistoryAnimations'>
 const MAX_PRELOAD_DELAY = 700;
 const SECOND_STATE_DELAY = 1000;
 const AVATARS_TO_PRELOAD = 10;
+
+function loadRequiredBundle(page?: UiLoaderPage) {
+  if (page === 'main' || page === 'lock') {
+    return loadModule(Bundles.Main);
+  }
+
+  if (page === 'authCode' || page === 'authPassword') {
+    return loadModule(Bundles.Auth);
+  }
+
+  return Promise.resolve();
+}
 
 function preloadAvatars() {
   const { listIds, byId } = getGlobal().chats;
@@ -78,11 +91,11 @@ function preloadAvatars() {
 
 const preloadTasks = {
   main: () => Promise.all([
-    loadModule(Bundles.Main)
-      .then(preloadFonts),
-    preloadAvatars(),
+    preloadFonts(),
     preloadImage(spoilerMaskPath),
     preloadImage(starIconPath),
+    preloadImage(playPreviewPath),
+    preloadImage(pausePreviewPath),
     localizationReadyPromise,
   ]),
   authPhoneNumber: () => Promise.all([
@@ -100,35 +113,44 @@ const preloadTasks = {
   },
 };
 
-const UiLoader: FC<OwnProps & StateProps> = ({
+const UiLoader = ({
   page,
   children,
   isRightColumnShown,
   shouldSkipHistoryAnimations,
   leftColumnWidth,
   isFoldersSidebarShown,
-}) => {
+  uiReadyState,
+  hasCachedChats,
+}: OwnProps & StateProps) => {
   const { setIsUiReady } = getActions();
 
   const [isReady, markReady] = useFlag();
+  const isReloading = isReady && uiReadyState === 0;
   const {
     shouldRender: shouldRenderMask, transitionClassNames,
-  } = useShowTransitionDeprecated(!isReady, undefined, true);
+  } = useShowTransitionDeprecated(!isReady || isReloading, undefined, true, 'fast', page === 'main' && hasCachedChats);
 
   useEffectOnce(() => {
     let timeout: number | undefined;
 
-    const safePreload = async () => {
+    const safePreload = async (currentPage: UiLoaderPage) => {
+      if (currentPage === 'main') {
+        void preloadAvatars()?.catch(() => undefined);
+      }
       try {
-        await preloadTasks[page!]();
+        await preloadTasks[currentPage]();
       } catch (err) {
         // Do nothing
       }
     };
 
-    Promise.race([
-      pause(MAX_PRELOAD_DELAY),
-      page ? safePreload() : Promise.resolve(),
+    Promise.all([
+      loadRequiredBundle(page),
+      Promise.race([
+        pause(MAX_PRELOAD_DELAY),
+        page ? safePreload(page) : Promise.resolve(),
+      ]),
     ]).then(() => {
       markReady();
       setIsUiReady({ uiReadyState: 1 });
@@ -151,8 +173,8 @@ const UiLoader: FC<OwnProps & StateProps> = ({
   return (
     <>
       {children}
-      {shouldRenderMask && !shouldSkipHistoryAnimations && Boolean(page) && (
-        <div className={buildClassName(styles.mask, transitionClassNames)}>
+      {shouldRenderMask && (isReloading || !shouldSkipHistoryAnimations) && Boolean(page) && (
+        <div className={buildClassName(styles.mask, isReloading && styles.outgoing, transitionClassNames)}>
           {page === 'main' ? (
             <div className={buildClassName(styles.main, isFoldersSidebarShown && styles.foldersSidebarVisible)}>
               {isFoldersSidebarShown && <div className={styles.foldersSidebar} />}
@@ -181,6 +203,7 @@ export default withGlobal<OwnProps>(
     const { foldersPosition } = selectSharedSettings(global);
 
     return {
+      hasCachedChats: Boolean(global.chats.listIds.active),
       shouldSkipHistoryAnimations: tabState.shouldSkipHistoryAnimations,
       uiReadyState: tabState.uiReadyState,
       isRightColumnShown: selectIsRightColumnShown(global, isMobile),

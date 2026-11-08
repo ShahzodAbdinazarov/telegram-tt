@@ -1,7 +1,8 @@
 export {
-  destroy, disconnect, downloadMedia, fetchCurrentUser, repairFileReference, abortChatRequests, abortRequestGroup,
+  cancelWebTokenAuthorization, destroy, disconnect, downloadMedia, fetchCurrentUser, repairFileReference,
+  abortChatRequests, abortRequestGroup,
   setForceHttpTransport, setShouldDebugExportedSenders, setAllowHttpTransport, requestChannelDifference,
-  setOpenedChannelIds,
+  setOpenedChannelIds, setLanguageCode,
 } from './client';
 
 export {
@@ -51,4 +52,9 @@ export * from './stars';
 
 export * from './forum';
 
+export * from './communities';
+
 export * from './misc';
+
+export * from './wallet';
+export * from './tonConnect';

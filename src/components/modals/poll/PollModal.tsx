@@ -26,9 +26,10 @@ import {
   selectTabState,
 } from '../../../global/selectors';
 import buildClassName from '../../../util/buildClassName';
-import { formatDateTimeToString, formatShortDuration } from '../../../util/dates/oldDateFormat';
+import { formatShortDuration } from '../../../util/dates/duration';
 import { DAY, HOUR } from '../../../util/dates/units';
 import { generateUniqueNumberId } from '../../../util/generateUniqueId';
+import { formatDateTime, secondsToDate } from '../../../util/localization/dateFormat';
 import { MEMO_EMPTY_ARRAY } from '../../../util/memo';
 import { getServerTime } from '../../../util/serverTime';
 
@@ -73,6 +74,7 @@ import Switch from '@gili/primitives/Switch';
 
 import styles from './PollModal.module.scss';
 
+const PAYMENT_DIALOG_KEY = 'poll';
 const MAX_OPTION_LENGTH = 100;
 const MAX_QUESTION_LENGTH = 255;
 const MAX_SOLUTION_LENGTH = 200;
@@ -112,7 +114,7 @@ type StateProps = {
   phoneCountryIso2?: string;
   countryList: ApiCountry[];
   paidMessagesStars?: number;
-  isPaymentMessageConfirmDialogOpen: boolean;
+  paymentMessageConfirmDialogKey?: string;
   starsBalance: number;
   isStarsBalanceModalOpen: boolean;
   isSilentPosting?: boolean;
@@ -153,7 +155,7 @@ const PollModal = ({
   phoneCountryIso2,
   countryList,
   paidMessagesStars,
-  isPaymentMessageConfirmDialogOpen,
+  paymentMessageConfirmDialogKey,
   starsBalance,
   isStarsBalanceModalOpen,
   isSilentPosting,
@@ -214,6 +216,7 @@ const PollModal = ({
     setAutoApprove,
     handleWithConfirmation,
   } = usePaidMessageConfirmation(
+    PAYMENT_DIALOG_KEY,
     paidMessagesStars || 0,
     isStarsBalanceModalOpen,
     starsBalance,
@@ -290,7 +293,7 @@ const PollModal = ({
 
   const hasLimitedDuration = closePeriod !== undefined || closeDate !== undefined;
   const closeDateLabel = closeDate !== undefined
-    ? formatDateTimeToString(closeDate * 1000, lang.code, true)
+    ? formatDateTime(lang, secondsToDate(closeDate), { date: 'short', time: 'short' })
     : closePeriod !== undefined
       ? formatShortDuration(lang, closePeriod)
       : lang('PollSelectCloseDate');
@@ -437,7 +440,16 @@ const PollModal = ({
 
   const handleCountrySelectionLimit = useLastCallback((selectionLimit: number) => {
     showNotification({
-      message: lang('PollCountriesLimit', { count: selectionLimit }, { pluralValue: selectionLimit }),
+      message: {
+        key: 'PollCountriesLimit',
+        variables: { count: selectionLimit },
+        options: {
+          pluralValue: selectionLimit,
+          withNodes: true,
+          withMarkdown: true,
+          renderTextFilters: ['br', 'links'],
+        },
+      },
     });
   });
 
@@ -692,7 +704,7 @@ const PollModal = ({
                     ref={handleProps?.ref}
                   >
                     <Icon
-                      name={isAddOptionRow ? 'add' : 'sort'}
+                      name={isAddOptionRow ? 'add' : 'hamburger'}
                       className={styles.optionLeadingIconGlyph}
                     />
                   </div>
@@ -929,7 +941,7 @@ const PollModal = ({
         onSelectionLimit={handleCountrySelectionLimit}
       />
       <PaymentMessageConfirmDialog
-        isOpen={isPaymentMessageConfirmDialogOpen}
+        isOpen={paymentMessageConfirmDialogKey === PAYMENT_DIALOG_KEY}
         onClose={closeConfirmDialog}
         userName={chat ? getPeerTitle(lang, chat) : undefined}
         messagePriceInStars={paidMessagesStars || 0}
@@ -1030,7 +1042,7 @@ export default memo(withGlobal<OwnProps>(
       phoneCountryIso2: global.appConfig.phoneCountryIso2,
       countryList: global.countryList.general,
       paidMessagesStars: selectPeerPaidMessagesStars(global, chatId),
-      isPaymentMessageConfirmDialogOpen: tabState.isPaymentMessageConfirmDialogOpen,
+      paymentMessageConfirmDialogKey: tabState.paymentMessageConfirmDialogKey,
       starsBalance: global.stars?.balance.amount || 0,
       isStarsBalanceModalOpen: Boolean(tabState.starsBalanceModal),
       isSilentPosting: chat ? getChatNotifySettings(

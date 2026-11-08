@@ -161,7 +161,7 @@ const SavedGift = ({
     >
       {radialPatternBackdrop}
       {!radialPatternBackdrop && <Avatar className={styles.topIcon} peer={avatarPeer} size="micro" />}
-      {gift.isPinned && <Icon name="pinned-message" className={styles.topIcon} />}
+      {gift.isPinned && <Icon name="pin-filled" className={styles.topIcon} />}
       <div
         ref={stickerRef}
         className={styles.stickerWrapper}
@@ -196,7 +196,7 @@ const SavedGift = ({
           inline
         >
           {resellPrice.currency === 'TON'
-            ? formatTonAsIcon(lang, resellPrice.amount, { shouldConvertFromNanos: true, className: styles.star })
+            ? formatTonAsIcon(lang, resellPrice.amount, { className: styles.star })
             : formatStarsAsIcon(lang, resellPrice.amount, { asFont: true, className: styles.star })}
         </Button>
       )}

@@ -1,4 +1,4 @@
-import type { TeactNode } from '../../../lib/teact/teact';
+import type { ElementRef, TeactNode } from '../../../lib/teact/teact';
 import {
   createContext,
   memo,
@@ -13,6 +13,8 @@ import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import buildClassName from '../../../util/buildClassName';
 import captureKeyboardListeners from '../../../util/captureKeyboardListeners';
 import { waitForAnimationEnd } from '../../../util/cssAnimationEndListeners';
+import { disableDirectTextInput, enableDirectTextInput } from '../../../util/directInputManager';
+import { countOpenModal } from '../../../util/openModals';
 
 import useContext from '../../../hooks/data/useContext';
 import useFrozenProps from '../../../hooks/useFrozenProps';
@@ -51,6 +53,8 @@ export type ModalProps = {
   ariaLabel?: string;
   noContainment?: boolean;
   onClose: NoneToVoidFunction;
+  onCloseAnimationEnd?: NoneToVoidFunction;
+  onEsc?: NoneToVoidFunction;
 };
 
 type ModalContextType = {
@@ -68,7 +72,12 @@ type ModalSlotProps = {
 };
 
 type ModalHeaderProps = {
+  ref?: ElementRef<HTMLDivElement>;
   noMask?: boolean;
+} & ModalSlotProps;
+
+type ModalFooterActionsProps = {
+  isVertical?: boolean;
 } & ModalSlotProps;
 
 type ModalTitleProps = {
@@ -78,6 +87,8 @@ type ModalTitleProps = {
 type ModalCloseButtonProps = {
   asAbsolute?: boolean;
   className?: string;
+  // Turns the cross into a back arrow
+  onBack?: NoneToVoidFunction;
 };
 
 const ModalContext = createContext<ModalContextType | undefined>(undefined);
@@ -102,12 +113,16 @@ function useModalContext() {
 
 function addBodyDialogClass() {
   openModalCount += 1;
+
+  const stopCounting = countOpenModal();
+
   requestMutation(() => {
     document.body.classList.add('has-open-dialog');
   });
 
   return () => {
     openModalCount = Math.max(0, openModalCount - 1);
+    stopCounting();
 
     if (!openModalCount) {
       requestMutation(() => {
@@ -134,6 +149,8 @@ const Modal = ({
   ariaLabel,
   noContainment,
   onClose,
+  onCloseAnimationEnd,
+  onEsc,
 }: ModalProps) => {
   const [hasEverOpened, setHasEverOpened] = useState(Boolean(isOpen));
   const [shouldRender, setShouldRender] = useState(Boolean(isOpen));
@@ -173,15 +190,9 @@ const Modal = ({
 
   const finishClose = useLastCallback(() => {
     cleanupCloseAnimation();
-
-    const dialogElement = dialogRef.current;
-
-    if (dialogElement?.open) {
-      dialogElement.close();
-    }
-
     setIsClosing(false);
     setShouldRender(false);
+    onCloseAnimationEnd?.();
   });
 
   const handleRequestClose = useLastCallback(() => {
@@ -194,6 +205,12 @@ const Modal = ({
     if (noLightDismiss || !isOpen || isClosing) return;
 
     event.preventDefault();
+
+    if (onEsc) {
+      onEsc();
+      return;
+    }
+
     handleRequestClose();
   });
 
@@ -323,6 +340,16 @@ const Modal = ({
       return undefined;
     }
 
+    disableDirectTextInput();
+
+    return enableDirectTextInput;
+  }, [shouldRender]);
+
+  useEffect(() => {
+    if (!shouldRender) {
+      return undefined;
+    }
+
     const dialogElement = dialogRef.current;
 
     if (!dialogElement) {
@@ -421,11 +448,14 @@ const Modal = ({
   );
 };
 
-const ModalHeader = ({ noMask, className, children }: ModalHeaderProps) => {
+const ModalHeader = ({
+  ref, noMask, className, children,
+}: ModalHeaderProps) => {
   const modalContext = useModalContext();
 
   return (
     <div
+      ref={ref}
       className={buildClassName(
         styles.header,
         modalContext?.hasSubtitle && styles.headerWithSubtitle,
@@ -446,9 +476,15 @@ const ModalHeaderAction = ({ className, children }: ModalSlotProps) => {
   );
 };
 
-const ModalFooterActions = ({ className, children }: ModalSlotProps) => {
+const ModalFooterActions = ({ isVertical, className, children }: ModalFooterActionsProps) => {
   return (
-    <div className={buildClassName(styles.footerActions, className)}>
+    <div
+      className={buildClassName(
+        styles.footerActions,
+        isVertical && styles.footerActionsVertical,
+        className,
+      )}
+    >
       {children}
     </div>
   );
@@ -500,11 +536,16 @@ const ModalSubtitle = ({ className, children }: ModalSlotProps) => {
   );
 };
 
-const ModalCloseButton = ({ asAbsolute, className }: ModalCloseButtonProps) => {
+const ModalCloseButton = ({ asAbsolute, className, onBack }: ModalCloseButtonProps) => {
   const lang = useLang();
   const modalContext = useModalContext();
 
   const handleClick = useLastCallback(() => {
+    if (onBack) {
+      onBack();
+      return;
+    }
+
     modalContext?.onClose();
   });
 
@@ -513,7 +554,7 @@ const ModalCloseButton = ({ asAbsolute, className }: ModalCloseButtonProps) => {
       round
       color="translucent"
       size="tiny"
-      ariaLabel={lang('Close')}
+      ariaLabel={onBack ? lang('Back') : lang('Close')}
       className={buildClassName(
         styles.closeButton,
         asAbsolute && styles.closeButtonAbsolute,
@@ -521,7 +562,7 @@ const ModalCloseButton = ({ asAbsolute, className }: ModalCloseButtonProps) => {
       )}
       onClick={handleClick}
     >
-      <div className="animated-close-icon" />
+      <div className={buildClassName('animated-close-icon', onBack && 'state-back')} />
     </Button>
   );
 };

@@ -2,6 +2,7 @@ import type {
   ApiAiComposeToneType,
   ApiAppConfig,
   ApiAttachBot,
+  ApiAudio,
   ApiAvailableEffect,
   ApiAvailableReaction,
   ApiBotPreviewMedia,
@@ -12,11 +13,13 @@ import type {
   ApiConfig,
   ApiCountry,
   ApiCountryCode,
+  ApiEmojiGroup,
   ApiEmojiStatusType,
   ApiGroupCall,
   ApiMessage,
   ApiMessagePoll,
   ApiNotifyPeerType,
+  ApiOnrampProvider,
   ApiPaidReactionPrivacyType,
   ApiPasskey,
   ApiPasskeyOption,
@@ -46,6 +49,7 @@ import type {
   ApiStoryAlbum,
   ApiTimezone,
   ApiTonAmount,
+  ApiTonConnectSession,
   ApiTopPeerCategory,
   ApiTranscription,
   ApiUpdateAuthorizationStateType,
@@ -53,8 +57,16 @@ import type {
   ApiUser,
   ApiUserCommonChats,
   ApiUserFullInfo,
+  ApiUserSavedMusic,
   ApiUserStatus,
   ApiVideo,
+  ApiWalletCollectible,
+  ApiWalletGaslessInfo,
+  ApiWalletSavedWallet,
+  ApiWalletState,
+  ApiWalletStatus,
+  ApiWalletTransaction,
+  ApiWalletUserAddress,
   ApiWallpaper,
   ApiWebPage,
   ApiWebSession,
@@ -66,14 +78,14 @@ import type {
   ChatListType,
   ChatTranslatedMessages,
   EmojiKeywords,
-  IThemeSettings,
+  OrderMode,
+  RepeatMode,
   ServiceNotification,
   SimilarBotsInfo,
   StarGiftCategory,
   StarsSubscriptions,
   StarsTransactionHistory,
   TextSummary,
-  ThemeKey,
   Thread,
   ThreadId,
   TopicsInfo,
@@ -120,6 +132,8 @@ export type GlobalState = {
     volume: number;
     lastPlaybackRate: number;
     isLastPlaybackRateActive?: boolean;
+    repeatMode: RepeatMode;
+    orderMode: OrderMode;
   };
 
   mediaViewer: {
@@ -127,6 +141,7 @@ export type GlobalState = {
   };
 
   recentlyFoundChatIds?: string[];
+  recentlyFoundSettingIds?: string[];
 
   twoFaSettings: {
     hint?: string;
@@ -152,10 +167,12 @@ export type GlobalState = {
   passcode: {
     isScreenLocked?: boolean;
     hasPasscode?: boolean;
-    error?: string;
+    hasPasskey?: boolean;
+    autolockDuration?: number;
+    isDataCorrupted?: boolean;
+    errorKey?: RegularLangFnParameters;
     timeoutUntil?: number;
     invalidAttemptsCount?: number;
-    invalidAttemptError?: string;
     isLoading?: boolean;
   };
 
@@ -196,6 +213,9 @@ export type GlobalState = {
   users: {
     byId: Record<string, ApiUser>;
     statusesById: Record<string, ApiUserStatus>;
+    savedMusicById?: Record<string, true>;
+    isSavedMusicLoading?: boolean;
+    savedMusicByPeerId: Record<string, ApiUserSavedMusic>;
     // Obtained from GetFullUser / UserFullInfo
     fullInfoById: Record<string, ApiUserFullInfo>;
     previewMediaByBotId: Record<string, ApiBotPreviewMedia[]>;
@@ -251,11 +271,15 @@ export type GlobalState = {
     notifyExceptionById: Record<string, ApiPeerNotifySettings>;
 
     similarBotsById: Record<string, SimilarBotsInfo>;
+
+    personalChannelIds?: string[];
   };
 
   messages: {
     byChatId: Record<string, {
       byId: Record<number, ApiMessage>;
+      ephemeralById: Record<number, ApiMessage>;
+      anchoredById: Record<number, ApiMessage>;
       summaryById: Record<number, TextSummary>;
       threadsById: Record<ThreadId, Thread>;
     }>;
@@ -369,6 +393,8 @@ export type GlobalState = {
     featured: {
       hash?: string;
       setIds?: string[];
+      isPremium?: boolean;
+      hiddenSetId?: string;
     };
     forEmoji: {
       emoji?: string;
@@ -411,6 +437,13 @@ export type GlobalState = {
   tonGifts?: ApiStickerSet;
   emojiKeywords: Record<string, EmojiKeywords | undefined>;
 
+  emojiGroups: {
+    hash?: number;
+    groups?: ApiEmojiGroup[];
+    stickerHash?: number;
+    stickerGroups?: ApiEmojiGroup[];
+  };
+
   collectibleEmojiStatuses?: {
     statuses: ApiEmojiStatusType[];
     hash?: string;
@@ -421,6 +454,10 @@ export type GlobalState = {
       hash?: string;
       gifs?: ApiVideo[];
     };
+  };
+
+  musicSearch: {
+    audiosById: Record<string, ApiAudio>;
   };
 
   topPeerCategories: Partial<Record<ApiTopPeerCategory, {
@@ -449,7 +486,6 @@ export type GlobalState = {
     lastPremiumBandwithNotificationDate?: number;
     paidReactionPrivacy?: ApiPaidReactionPrivacyType;
     botVerificationShownPeerIds: string[];
-    themes: Partial<Record<ThemeKey, IThemeSettings>>;
     accountDaysTtl: number;
     passkeys?: ApiPasskey[];
   };
@@ -491,6 +527,48 @@ export type GlobalState = {
     balance: ApiTonAmount;
     history: StarsTransactionHistory;
   };
+  wallet?: {
+    tonConnectSessions?: ApiTonConnectSession[];
+    isLoadingTonConnectSessions?: boolean;
+    hasTonConnectSessionsError?: boolean;
+    // Unknown until the first `wallet.getState` answers
+    status?: ApiWalletStatus;
+    // The last `wallet.getState` failed
+    hasStateError?: boolean;
+    state?: ApiWalletState;
+    transactions?: ApiWalletTransaction[];
+    // `undefined` means the whole history is loaded; the empty string is the cache's "stale, refresh first"
+    nextOffset?: string;
+    collectibles?: ApiWalletCollectible[];
+    collectiblesNextOffset?: string;
+    // Empty for a user the server knows no wallet of
+    userAddresses?: Record<string, string>;
+    // `false` records an address with no Telegram user
+    resolvedAddresses?: Record<string, ApiWalletUserAddress | false>;
+    hasLocalSecret?: boolean;
+    isKeyRotationPending?: boolean;
+    // Tells the echo of a swap made here from a swap made on another device
+    isReplacing?: boolean;
+    // The server balance a sent transfer was deducted from; the same figure from the server is stale
+    staleBalance?: {
+      amount: bigint;
+      // Server time, seconds
+      expiresAt: number;
+    };
+    onrampProviders?: ApiOnrampProvider[];
+    decryptedComments?: Record<string, string>;
+    gaslessInfo?: ApiWalletGaslessInfo;
+    // Nanotons
+    keyRotationFee?: bigint;
+    loadedTransactions?: Record<string, ApiWalletTransaction>;
+    savedWallets?: ApiWalletSavedWallet[];
+    // Present while the former wallet bot still holds money
+    existingWaltBalanceUrl?: string;
+  };
+
+  // Against USD
+  currencyRates?: Record<string, number>;
+  walletCurrency?: string;
 };
 
 export type RequiredGlobalState = GlobalState & { _: never };

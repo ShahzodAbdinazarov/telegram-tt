@@ -1,8 +1,6 @@
-import type { FC } from '@teact';
 import {
   memo, useEffect,
   useMemo, useRef, useState } from '@teact';
-import type React from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type {
@@ -31,7 +29,6 @@ import useFlag from '../../../hooks/useFlag';
 import { useIntersectionObserver } from '../../../hooks/useIntersectionObserver';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
 import Avatar from '../../common/Avatar';
 import InteractiveSparkles from '../../common/InteractiveSparkles';
@@ -81,7 +78,7 @@ const CATEGORY_LIST_STICKY_TOP = 3.5 * REM;
 
 const runThrottledForScroll = throttle((cb) => cb(), SCROLL_THROTTLE, true);
 
-const GiftModal: FC<OwnProps & StateProps> = ({
+const GiftModal = ({
   modal,
   starGiftsById,
   starGiftIdsByCategory,
@@ -96,7 +93,7 @@ const GiftModal: FC<OwnProps & StateProps> = ({
   selectedResaleGift,
   resaleFilter,
   tabId,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     closeGiftModal,
     openGiftInfoModal,
@@ -148,7 +145,6 @@ const GiftModal: FC<OwnProps & StateProps> = ({
   const areLimitedStarGiftsDisallowed = !isSelf && disallowedGifts?.shouldDisallowLimitedStarGifts;
   const areUniqueStarGiftsDisallowed = !isSelf && disallowedGifts?.shouldDisallowUniqueStarGifts;
 
-  const oldLang = useOldLang();
   const lang = useLang();
   const allGifts = renderingModal?.gifts;
   const filteredGifts = useMemo(() => {
@@ -237,7 +233,7 @@ const GiftModal: FC<OwnProps & StateProps> = ({
   });
 
   const giftPremiumDescription = lang('GiftPremiumDescription', {
-    user: getUserFullName(user)!,
+    user: getUserFullName(lang, user)!,
     link: (
       <SafeLink
         text={lang('GiftPremiumDescriptionLinkCaption')}
@@ -271,7 +267,7 @@ const GiftModal: FC<OwnProps & StateProps> = ({
     }
 
     return lang('StarGiftDescription', {
-      user: getUserFullName(user)!,
+      user: getUserFullName(lang, user)!,
     }, { withNodes: true, withMarkdown: true });
   }, [chat, isSelf, selectedCategory, user, lang]);
 
@@ -596,7 +592,7 @@ const GiftModal: FC<OwnProps & StateProps> = ({
         color="translucent"
         size="tiny"
         onClick={handleCloseButtonClick}
-        ariaLabel={isBackButton ? oldLang('Common.Back') : oldLang('Common.Close')}
+        ariaLabel={isBackButton ? lang('Back') : lang('Close')}
       >
         <div className={buttonClassName} />
       </Button>

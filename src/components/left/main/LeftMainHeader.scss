@@ -63,7 +63,7 @@
       height: 0.125rem;
       border-radius: 0.125rem;
 
-      background-color: var(--color-text-secondary);
+      background-color: currentColor;
 
       transition: transform 0.25s;
     }
@@ -176,6 +176,14 @@
       left: auto;
     }
   }
+
+  .left-search-picker-item:has(.Avatar.forum) {
+    --border-radius-forum-avatar: 40%;
+
+    border-radius: var(--border-radius-forum-avatar);
+
+    corner-shape: squircle;
+  }
 }
 
 #LeftMainHeader,
@@ -186,8 +194,8 @@
     &-test {
       position: absolute;
       z-index: 1;
-      bottom: 0.0625rem;
       inset-inline-start: 2.875rem;
+      bottom: 0.0625rem;
 
       font-size: 0.5rem;
       font-weight: var(--font-weight-medium);

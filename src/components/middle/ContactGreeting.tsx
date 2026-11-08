@@ -1,4 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
 import {
   memo, useEffect, useMemo, useRef,
 } from '../../lib/teact/teact';
@@ -20,8 +19,8 @@ import {
 } from '../../global/selectors';
 import { selectThreadReadState } from '../../global/selectors/threads';
 
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
-import useOldLang from '../../hooks/useOldLang';
 
 import StickerView from '../common/StickerView';
 
@@ -33,6 +32,7 @@ type OwnProps = {
 
 type StateProps = {
   defaultStickers?: ApiSticker[];
+  areDefaultStickersLoaded: boolean;
   lastMessageId?: number;
   connectionState?: ApiUpdateConnectionStateType;
   currentMessageList?: MessageList;
@@ -40,21 +40,22 @@ type StateProps = {
   user?: ApiUser;
 };
 
-const ContactGreeting: FC<OwnProps & StateProps> = ({
+const ContactGreeting = ({
   defaultStickers,
+  areDefaultStickersLoaded,
   connectionState,
   lastMessageId,
   currentMessageList,
   businessIntro,
   user,
-}) => {
+}: OwnProps & StateProps) => {
   const {
     loadGreetingStickers,
     sendMessage,
     markMessageListRead,
   } = getActions();
 
-  const oldLang = useOldLang();
+  const lang = useLang();
 
   const containerRef = useRef<HTMLDivElement>();
 
@@ -67,12 +68,12 @@ const ContactGreeting: FC<OwnProps & StateProps> = ({
   }, [businessIntro?.sticker, defaultStickers]);
 
   useEffect(() => {
-    if (defaultStickers?.length || connectionState !== 'connectionStateReady') {
+    if (areDefaultStickersLoaded || connectionState !== 'connectionStateReady') {
       return;
     }
 
     loadGreetingStickers();
-  }, [connectionState, loadGreetingStickers, defaultStickers]);
+  }, [connectionState, loadGreetingStickers, areDefaultStickersLoaded]);
 
   useEffect(() => {
     if (connectionState === 'connectionStateReady' && lastMessageId) {
@@ -91,8 +92,8 @@ const ContactGreeting: FC<OwnProps & StateProps> = ({
     });
   });
 
-  const title = businessIntro?.title || oldLang('Conversation.EmptyPlaceholder');
-  const description = businessIntro?.description || oldLang('Conversation.GreetingText');
+  const title = businessIntro?.title || lang('ConversationEmptyPlaceholder');
+  const description = businessIntro?.description || lang('ConversationGreetingText');
 
   return (
     <div className={styles.root}>
@@ -113,7 +114,7 @@ const ContactGreeting: FC<OwnProps & StateProps> = ({
       </div>
       {businessIntro && (
         <div className={styles.explainer}>
-          {oldLang('Chat.EmptyStateIntroFooter', getUserFullName(user))}
+          {lang('ChatEmptyStateIntroFooter', { user: getUserFullName(lang, user) })}
         </div>
       )}
     </div>
@@ -122,7 +123,7 @@ const ContactGreeting: FC<OwnProps & StateProps> = ({
 
 export default memo(withGlobal<OwnProps>(
   (global, { userId }): Complete<StateProps> => {
-    const { stickers } = global.stickers.greeting;
+    const { stickers, hash } = global.stickers.greeting;
     const chat = selectChat(global, userId);
     if (!chat) {
       return {} as Complete<StateProps>;
@@ -139,6 +140,7 @@ export default memo(withGlobal<OwnProps>(
 
     return {
       defaultStickers: stickers,
+      areDefaultStickersLoaded: hash !== undefined,
       lastMessageId: unreadCount ? lastMessageId : undefined,
       connectionState: global.connectionState,
       currentMessageList: selectCurrentMessageList(global),

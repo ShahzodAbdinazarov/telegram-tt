@@ -36,6 +36,7 @@ import type {
 } from '../../types';
 import type { UniversalMessage } from './messages';
 
+import { buildPageAudioById } from '../../../global/helpers/buildPageAudioById';
 import { addTimestampEntities } from '../../../util/dates/timestamp';
 import { buildCollectionByKey, pick } from '../../../util/iteratees';
 import { toJSNumber } from '../../../util/numbers';
@@ -842,6 +843,9 @@ export function buildWebPage(webPage: GramJs.TypeWebPage): ApiWebPage | undefine
       };
     }
 
+    const builtCachedPage = cachedPage instanceof GramJs.Page
+      ? buildApiInstantViewPage(cachedPage, webPage) : undefined;
+
     const attributeAiTone = attributes?.find((a): a is GramJs.WebPageAttributeAiComposeTone => (
       a instanceof GramJs.WebPageAttributeAiComposeTone
     ));
@@ -869,7 +873,8 @@ export function buildWebPage(webPage: GramJs.TypeWebPage): ApiWebPage | undefine
       gift,
       auction,
       stickers,
-      cachedPage: cachedPage instanceof GramJs.Page ? buildApiInstantViewPage(cachedPage, webPage) : undefined,
+      cachedPage: builtCachedPage,
+      cachedPageAudioById: builtCachedPage ? buildPageAudioById(builtCachedPage) : undefined,
       aiComposeToneEmojiId: attributeAiTone?.emojiId.toString(),
     };
   }

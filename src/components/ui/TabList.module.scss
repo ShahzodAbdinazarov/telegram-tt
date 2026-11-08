@@ -64,11 +64,15 @@
 
     width: fit-content;
 
-    background-color: var(--color-primary-opacity);
+    // An opaque base prevents the original labels from showing through the highlighted copies
+    background-color: var(--color-background);
+    background-image: linear-gradient(var(--color-primary-opacity), var(--color-primary-opacity));
 
     transition: clip-path var(--slide-transition);
 
-    &.stretched {
+    // The highlighted copies line up with the original tabs only when both rows are laid out across the same width
+    &.stretched,
+    &.centered {
       width: 100%;
     }
   }
@@ -134,7 +138,7 @@
 
       position: absolute;
       z-index: 9;
-      top: 50%;
+      top: var(--fade-mask-top, 50%);
       left: 0;
 
       width: 100%;

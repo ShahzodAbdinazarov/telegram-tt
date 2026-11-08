@@ -1,23 +1,20 @@
 import { addCallback } from '../../../lib/teact/teactn';
 
 import type { ApiNotification } from '../../../api/types';
-import type { LangCode } from '../../../types';
 import type { ActionReturnType, GlobalState } from '../../types';
 
 import { requestMutation } from '../../../lib/fasterdom/fasterdom';
 import { IS_ELECTRON, IS_MULTIACCOUNT_SUPPORTED, IS_TAURI } from '../../../util/browser/globalEnvironment';
 import {
   IS_ANDROID, IS_IOS, IS_LINUX,
-  IS_MAC_OS, IS_SAFARI, IS_TOUCH_ENV, IS_WINDOWS,
+  IS_MAC_OS, IS_SAFARI, IS_TOUCH_ENV, IS_WINDOWS, setScrollbarWidthProperty,
 } from '../../../util/browser/windowEnvironment';
 import { getCurrentTabId } from '../../../util/establishMultitabRole';
 import generateUniqueId from '../../../util/generateUniqueId';
-import { setTimeFormat as setLocalizedTimeFormat } from '../../../util/localization';
+import { setTimeFormat } from '../../../util/localization';
 import { subscribe, unsubscribe } from '../../../util/notifications';
-import { oldSetLanguage } from '../../../util/oldLangProvider';
-import { decryptSessionByCurrentHash } from '../../../util/passcode';
 import { applyPerformanceSettings } from '../../../util/perfomanceSettings';
-import { hasStoredSession, storeSession } from '../../../util/sessions';
+import { hasStoredSession } from '../../../util/sessions';
 import switchTheme from '../../../util/switchTheme';
 import { getSystemTheme, setSystemThemeChangeCallback } from '../../../util/systemTheme';
 import { startWebsync, stopWebsync } from '../../../util/websync';
@@ -48,7 +45,7 @@ setSystemThemeChangeCallback((theme) => {
   setGlobal(global);
 });
 
-addActionHandler('switchMultitabRole', async (global, actions, payload): Promise<void> => {
+addActionHandler('switchMultitabRole', (global, actions, payload): ActionReturnType => {
   const { isMasterTab, tabId = getCurrentTabId() } = payload;
 
   if (isMasterTab === selectTabState(global, tabId).isMasterTab) {
@@ -69,12 +66,6 @@ addActionHandler('switchMultitabRole', async (global, actions, payload): Promise
     clearCaching();
     actions.onSomeTabSwitchedMultitabRole();
   } else {
-    if (global.passcode.hasPasscode && !global.passcode.isScreenLocked) {
-      const { sessionJson } = await decryptSessionByCurrentHash();
-      const session = JSON.parse(sessionJson);
-      storeSession(session);
-    }
-
     if (hasStoredSession()) {
       setupCaching();
     }
@@ -98,13 +89,7 @@ addActionHandler('switchMultitabRole', async (global, actions, payload): Promise
   }
 });
 
-addActionHandler('onSomeTabSwitchedMultitabRole', async (global): Promise<void> => {
-  if (global.passcode.hasPasscode && !global.passcode.isScreenLocked) {
-    const { sessionJson } = await decryptSessionByCurrentHash();
-    const session = JSON.parse(sessionJson);
-    storeSession(session);
-  }
-
+addActionHandler('onSomeTabSwitchedMultitabRole', (): ActionReturnType => {
   callApi('broadcastLocalDbUpdateFull');
 });
 
@@ -112,7 +97,9 @@ addActionHandler('initShared', (): ActionReturnType => {
   startWebsync();
 });
 
-addActionHandler('initMain', (global): ActionReturnType => {
+addActionHandler('initMain', (global, actions): ActionReturnType => {
+  actions.cleanupExpiredTtlMessages();
+
   const { hasWebNotifications, hasPushNotifications } = selectSettingsKeys(global);
   if (hasWebNotifications && hasPushNotifications) {
     // Most of the browsers only show the notifications permission prompt after the first user gesture.
@@ -140,7 +127,7 @@ addCallback((global: GlobalState) => {
   }, tabState.id);
 
   const {
-    messageTextSize, language, shouldUseSystemTheme, timeFormat,
+    messageTextSize, shouldUseSystemTheme, timeFormat,
   } = selectSharedSettings(global);
 
   const globalTheme = selectTheme(global);
@@ -149,8 +136,7 @@ addCallback((global: GlobalState) => {
 
   const performanceType = selectPerformanceSettings(global);
 
-  void oldSetLanguage(language as LangCode, undefined);
-  setLocalizedTimeFormat(timeFormat);
+  setTimeFormat(timeFormat);
 
   requestMutation(() => {
     document.documentElement.style.setProperty(
@@ -188,6 +174,8 @@ addCallback((global: GlobalState) => {
   const canAnimate = selectCanAnimateInterface(global);
 
   switchTheme(theme, canAnimate);
+  setScrollbarWidthProperty();
+
   // Make sure global has the latest theme. Will cause `switchTheme` on change
   global = updateSharedSettings(global, { theme });
 

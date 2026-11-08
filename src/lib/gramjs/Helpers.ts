@@ -306,23 +306,6 @@ export function randomBits(k: number): bigint {
   return r & ((1n << BigInt(k)) - 1n);
 }
 
-export function randBetweenBigInt(a: bigint, b: bigint): bigint {
-  const low = a < b ? a : b;
-  const high = a < b ? b : a;
-  const range = high - low + 1n;
-
-  if (range <= 1n) return low;
-
-  const k = bitLength(range - 1n);
-  const twoPowK = 1n << BigInt(k);
-  const limit = (twoPowK / range) * range;
-
-  for (;;) {
-    const r = randomBits(k);
-    if (r < limit) return low + (r % range);
-  }
-}
-
 export function sleep(ms: number) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -397,31 +380,6 @@ export function bitLength(x: bigint) {
 
   return i + 32 - Math.clz32(Number(a));
 }
-
-export const BigMath = {
-  abs(x: bigint) {
-    return x < 0n ? -x : x;
-  },
-  sign(x: bigint) {
-    if (x === 0n) return 0n;
-    return x < 0n ? -1n : 1n;
-  },
-  pow(base: bigint, exponent: bigint) {
-    return base ** exponent;
-  },
-  min(value: bigint, ...values: bigint[]) {
-    for (const v of values) {
-      if (v < value) value = v;
-    }
-    return value;
-  },
-  max(value: bigint, ...values: bigint[]) {
-    for (const v of values) {
-      if (v > value) value = v;
-    }
-    return value;
-  },
-};
 
 export function jsonStringifyWithBigInt(obj: any) {
   return JSON.stringify(obj, (key, value) => {

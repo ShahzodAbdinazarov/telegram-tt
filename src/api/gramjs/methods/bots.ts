@@ -12,9 +12,11 @@ import type {
   ApiUrlAuthResult,
   ApiUser,
 } from '../../types';
+import type { InlineBotRepairInfo } from '../localDb';
 
 import { WEB_APP_PLATFORM } from '../../../config';
 import { buildCollectionByKey } from '../../../util/iteratees';
+import { getMtpEphemeralMessageId } from '../../../util/keys/messageKey';
 import {
   buildApiAttachBot,
   buildApiBotInlineMediaResult,
@@ -37,12 +39,17 @@ import {
 } from '../gramjsBuilders';
 import {
   addDocumentToLocalDb,
+  addInlineBotRepairInfo,
   addPhotoToLocalDb,
+  addUserToLocalDb,
   addWebDocumentToLocalDb,
 } from '../helpers/localDb';
-import { deserializeBytes } from '../helpers/misc';
+import { checkErrorType, deserializeBytes, wrapError } from '../helpers/misc';
 import { sendApiUpdate } from '../updates/apiUpdateEmitter';
 import { invokeRequest } from './client';
+import { returnTonConnectOauthSession, takeTonConnectOauthSession } from './tonConnect';
+
+const BOT_USERNAME_ERRORS = new Set(['USERNAME_OCCUPIED', 'USERNAME_INVALID', 'USERNAME_SUFFIX_MISSING']);
 
 export async function answerCallbackButton({
   chatId, accessHash, messageId, data, isGame,
@@ -54,6 +61,20 @@ export async function answerCallbackButton({
     msgId: messageId,
     data: data ? deserializeBytes(data) : undefined,
     game: isGame || undefined,
+  }));
+
+  return result ? omitVirtualClassFields(result) : undefined;
+}
+
+export async function answerEphemeralCallbackButton({
+  chat, messageId, data,
+}: {
+  chat: ApiChat; messageId: number; data?: string;
+}) {
+  const result = await invokeRequest(new GramJs.ephemeral.GetCallbackAnswer({
+    peer: buildInputPeer(chat.id, chat.accessHash),
+    id: getMtpEphemeralMessageId(messageId),
+    data: data ? deserializeBytes(data) : undefined,
   }));
 
   return result ? omitVirtualClassFields(result) : undefined;
@@ -81,7 +102,13 @@ export async function fetchInlineBotResults({
     nextOffset: getInlineBotResultsNextOffset(bot.usernames![0].username, result.nextOffset),
     switchPm: buildBotSwitchPm(result.switchPm),
     switchWebview: buildBotSwitchWebview(result.switchWebview),
-    results: processInlineBotResult(String(result.queryId), result.results),
+    results: processInlineBotResult(String(result.queryId), result.results, {
+      type: 'inlineBot',
+      botId: bot.id,
+      peerId: chat.id,
+      query,
+      offset,
+    }),
     cacheTime: result.cacheTime,
   };
 }
@@ -133,6 +160,26 @@ export async function startBot({
   });
 }
 
+export function sendBotRequestedPeer({
+  chat, messageId, buttonId, requestedPeers,
+}: {
+  chat: ApiChat;
+  messageId: number;
+  buttonId: number;
+  requestedPeers: ApiPeer[];
+}) {
+  return invokeRequest(new GramJs.messages.SendBotRequestedPeer({
+    peer: buildInputPeer(chat.id, chat.accessHash),
+    msgId: messageId,
+    buttonId,
+    requestedPeers: requestedPeers.map((requestedPeer) => (
+      buildInputPeer(requestedPeer.id, requestedPeer.accessHash)
+    )),
+  }), {
+    shouldReturnTrue: true,
+  });
+}
+
 export async function requestWebView({
   isSilent,
   peer,
@@ -175,6 +222,7 @@ export async function requestWebView({
       url: result.url,
       queryId: result.queryId?.toString(),
       isFullScreen: Boolean(result.fullscreen),
+      isSameOrigin: result.sameOrigin,
     };
   }
 
@@ -211,6 +259,7 @@ export async function requestMainWebView({
     url: result.url,
     queryId: result.queryId?.toString(),
     isFullscreen: Boolean(result.fullscreen),
+    isSameOrigin: result.sameOrigin,
   };
 }
 
@@ -239,7 +288,14 @@ export async function requestSimpleWebView({
     fromSideMenu: isFromSideMenu || undefined,
   }));
 
-  return result?.url;
+  if (!(result instanceof GramJs.WebViewResultUrl)) {
+    return undefined;
+  }
+
+  return {
+    url: result.url,
+    isSameOrigin: result.sameOrigin,
+  };
 }
 
 export async function fetchBotApp({
@@ -289,7 +345,15 @@ export async function requestAppWebView({
     fullscreen: mode === 'fullscreen' || undefined,
   }));
 
-  return { url: result?.url, isFullscreen: Boolean(result?.fullscreen) };
+  if (!(result instanceof GramJs.WebViewResultUrl)) {
+    return undefined;
+  }
+
+  return {
+    url: result.url,
+    isFullscreen: Boolean(result.fullscreen),
+    isSameOrigin: result.sameOrigin,
+  };
 }
 
 export function prolongWebView({
@@ -405,6 +469,7 @@ export async function acceptBotUrlAuth({
   isWriteAllowed,
   wasPhoneShared,
   matchCode,
+  walletSessionId,
 }: {
   chat: ApiChat;
   messageId: number;
@@ -412,14 +477,16 @@ export async function acceptBotUrlAuth({
   isWriteAllowed?: boolean;
   wasPhoneShared?: boolean;
   matchCode?: string;
+  walletSessionId?: string;
 }) {
-  return invokeUrlAuthRequest(new GramJs.messages.AcceptUrlAuth({
+  return acceptUrlAuth(walletSessionId, (tonconnectSession) => new GramJs.messages.AcceptUrlAuth({
     peer: buildInputPeer(chat.id, chat.accessHash),
     msgId: messageId,
     buttonId,
     writeAllowed: isWriteAllowed || undefined,
     sharePhoneNumber: wasPhoneShared || undefined,
     matchCode: matchCode || undefined,
+    tonconnectSession,
   }));
 }
 
@@ -430,19 +497,48 @@ export async function requestLinkUrlAuth({ url }: { url: string }) {
 }
 
 export async function acceptLinkUrlAuth({
-  url, isWriteAllowed, wasPhoneShared, matchCode,
+  url, isWriteAllowed, wasPhoneShared, matchCode, walletSessionId,
 }: {
   url: string;
   isWriteAllowed?: boolean;
   wasPhoneShared?: boolean;
   matchCode?: string;
+  walletSessionId?: string;
 }) {
-  return invokeUrlAuthRequest(new GramJs.messages.AcceptUrlAuth({
+  return acceptUrlAuth(walletSessionId, (tonconnectSession) => new GramJs.messages.AcceptUrlAuth({
     url,
     writeAllowed: isWriteAllowed || undefined,
     sharePhoneNumber: wasPhoneShared || undefined,
     matchCode: matchCode || undefined,
+    tonconnectSession,
   }));
+}
+
+// Without the prepared connection the login is not sent: the site would get the login but not the wallet
+async function acceptUrlAuth(
+  walletSessionId: string | undefined,
+  buildRequest: (tonconnectSession?: GramJs.InputTonConnectOauthSession) => GramJs.messages.AcceptUrlAuth,
+): Promise<ApiUrlAuthResult | undefined> {
+  let tonconnectSession = walletSessionId ? takeTonConnectOauthSession(walletSessionId) : undefined;
+
+  if (walletSessionId && !tonconnectSession) {
+    return { type: 'expired' };
+  }
+
+  try {
+    return await invokeUrlAuthRequest(buildRequest(tonconnectSession));
+  } catch (err) {
+    // An error from the server means the request was processed and the prepared session is spent. A network error
+    // leaves the request unsent or unanswered, so the session goes back and Login can be pressed again.
+    if (tonconnectSession && !(err instanceof RPCError)) {
+      returnTonConnectOauthSession(walletSessionId!, tonconnectSession);
+      tonconnectSession = undefined;
+    }
+
+    throw err;
+  } finally {
+    tonconnectSession?.challengeAnswer.fill(0);
+  }
 }
 
 export async function checkUrlAuthMatchCode({ url, matchCode }: { url: string; matchCode: string }) {
@@ -562,11 +658,13 @@ export function toggleUserEmojiStatusPermission({ bot, isEnabled }: { bot: ApiUs
   });
 }
 
-function processInlineBotResult(queryId: string, results: GramJs.TypeBotInlineResult[]) {
+function processInlineBotResult(
+  queryId: string, results: GramJs.TypeBotInlineResult[], repairInfo: InlineBotRepairInfo,
+) {
   return results.map((result) => {
     if (result instanceof GramJs.BotInlineMediaResult) {
       if (result.document instanceof GramJs.Document) {
-        addDocumentToLocalDb(result.document);
+        addDocumentToLocalDb(addInlineBotRepairInfo(result.document, repairInfo));
       }
 
       if (result.photo instanceof GramJs.Photo) {
@@ -652,6 +750,51 @@ export async function fetchBotsRecommendations({ user }: { user: ApiChat }) {
     similarBots,
     count: result instanceof GramJs.users.UsersSlice ? result.count : similarBots.length,
   };
+}
+
+export async function checkBotUsername({ username }: { username: string }) {
+  try {
+    const result = await invokeRequest(new GramJs.bots.CheckUsername({ username }), {
+      shouldThrow: true,
+    });
+
+    return { result, error: undefined };
+  } catch (err: unknown) {
+    if (err instanceof RPCError && BOT_USERNAME_ERRORS.has(err.errorMessage)) {
+      return { result: false, error: err.errorMessage };
+    }
+
+    throw err;
+  }
+}
+
+export async function createBot({
+  manager, name, username, isViaDeepLink,
+}: {
+  manager: ApiUser;
+  name: string;
+  username: string;
+  isViaDeepLink?: true;
+}) {
+  try {
+    const result = await invokeRequest(new GramJs.bots.CreateBot({
+      managerId: buildInputUser(manager.id, manager.accessHash),
+      name,
+      username,
+      viaDeeplink: isViaDeepLink,
+    }), {
+      shouldThrow: true,
+    });
+
+    if (!(result instanceof GramJs.User)) return undefined;
+
+    addUserToLocalDb(result);
+
+    return buildApiUser(result);
+  } catch (err) {
+    if (!checkErrorType(err)) return undefined;
+    return wrapError(err);
+  }
 }
 
 async function invokeUrlAuthRequest(

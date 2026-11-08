@@ -4,7 +4,6 @@ declare module '*.css';
 declare module '*.scss';
 
 declare const APP_VERSION: string;
-declare const CHANGELOG_DATETIME: number | undefined;
 
 declare module 'virtual:git-info' {
   export const APP_REVISION: string;
@@ -12,7 +11,6 @@ declare module 'virtual:git-info' {
 
 interface ImportMetaEnv {
   readonly TG_APP_ENV: string;
-  readonly TG_APP_MOCKED_CLIENT: string;
   readonly TG_APP_NAME?: string;
   readonly TG_APP_TITLE: string;
   readonly TG_PUBLIC_URL: string;
@@ -26,6 +24,7 @@ declare namespace React {
     // Optimization for DOM nodes prepends and inserts
     teactFastList?: boolean;
     teactExperimentControlled?: boolean;
+    onFileHoverOpen?: (e: Event) => void;
   }
 
   interface LiHTMLAttributes<_T> {
@@ -111,10 +110,6 @@ declare module '*.svg' {
   const url: string;
   export default url;
 }
-declare module '*.txt?raw' {
-  const content: string;
-  export default content;
-}
 declare module '*.tgs' {
   const url: string;
   export default url;
@@ -123,9 +118,21 @@ declare module '*.wasm' {
   const url: string;
   export default url;
 }
+declare module '*.wasm?url' {
+  const url: string;
+  export default url;
+}
 declare module '*.strings?raw' {
   const content: string;
   export default content;
+}
+declare module '*.wgsl?raw' {
+  const content: string;
+  export default content;
+}
+declare module '*.bin?url&no-inline' {
+  const url: string;
+  export default url;
 }
 
 declare module 'opus-recorder' {
@@ -221,4 +228,26 @@ interface FileSystemSyncAccessHandle {
 
 type FilesystemReadWriteOptions = {
   at: number;
+};
+
+// WebGPU parts missing from the DOM library of TypeScript
+interface HTMLCanvasElement {
+  getContext(contextId: 'webgpu'): GPUCanvasContext | null;
+}
+
+declare const GPUBufferUsage: {
+  readonly COPY_DST: GPUBufferUsageFlags;
+  readonly VERTEX: GPUBufferUsageFlags;
+  readonly UNIFORM: GPUBufferUsageFlags;
+};
+
+declare const GPUShaderStage: {
+  readonly VERTEX: GPUShaderStageFlags;
+  readonly FRAGMENT: GPUShaderStageFlags;
+};
+
+declare const GPUTextureUsage: {
+  readonly COPY_SRC: GPUTextureUsageFlags;
+  readonly COPY_DST: GPUTextureUsageFlags;
+  readonly RENDER_ATTACHMENT: GPUTextureUsageFlags;
 };

@@ -5,7 +5,9 @@ import { getActions, withGlobal } from '../../../global';
 import type { ApiMessage } from '../../../api/types';
 import type { ThreadId } from '../../../types';
 
-import { selectChatMessage, selectCurrentMessageList } from '../../../global/selectors';
+import { isKeyboardButtonUnsupportedForEphemeral } from '../../../global/helpers';
+import { isButtonUnsupported } from '../../../global/helpers/buttons';
+import { selectChatMessageOrEphemeral, selectCurrentMessageList } from '../../../global/selectors';
 import { IS_TOUCH_ENV } from '../../../util/browser/windowEnvironment';
 import buildClassName from '../../../util/buildClassName';
 import renderKeyboardButtonText from './helpers/renderKeyboardButtonText';
@@ -86,7 +88,8 @@ const BotKeyboardMenu = ({
                 )}
                 ripple
                 noForcedUpperCase
-                disabled={button.type === 'unsupported'}
+                disabled={isButtonUnsupported(button.action)
+                  || (message.isEphemeral && isKeyboardButtonUnsupportedForEphemeral(button))}
                 onClick={() => clickBotInlineButton({
                   chatId: message.chatId, messageId: message.id, threadId, button,
                 })}
@@ -114,7 +117,9 @@ export default memo(withGlobal<OwnProps>(
   (global, { messageId }): Complete<StateProps> => {
     const { chatId } = selectCurrentMessageList(global) || {};
 
-    const message = chatId ? selectChatMessage(global, chatId, messageId) : undefined;
+    const message = chatId
+      ? selectChatMessageOrEphemeral(global, chatId, messageId)
+      : undefined;
     return {
       message,
     };

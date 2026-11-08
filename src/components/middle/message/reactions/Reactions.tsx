@@ -1,5 +1,3 @@
-import type { FC } from '../../../../lib/teact/teact';
-import type React from '../../../../lib/teact/teact';
 import { memo, useEffect, useMemo } from '../../../../lib/teact/teact';
 import { getActions, getGlobal } from '../../../../global';
 
@@ -19,8 +17,8 @@ import buildClassName from '../../../../util/buildClassName';
 import { getMessageKey } from '../../../../util/keys/messageKey';
 
 import useEffectOnce from '../../../../hooks/useEffectOnce';
+import useLang from '../../../../hooks/useLang';
 import useLastCallback from '../../../../hooks/useLastCallback';
-import useOldLang from '../../../../hooks/useOldLang';
 
 import ReactionButton from './ReactionButton';
 import SavedTagButton from './SavedTagButton';
@@ -31,7 +29,6 @@ type OwnProps = {
   message: ApiMessage;
   threadId?: ThreadId;
   isOutside?: boolean;
-  maxWidth?: number;
   metaChildren?: React.ReactNode;
   tags?: Record<ApiReactionKey, ApiSavedReactionTag>;
   isCurrentUserPremium?: boolean;
@@ -43,18 +40,17 @@ type OwnProps = {
 const MAX_RECENT_AVATARS = 3;
 const PAID_SEND_DELAY = 5000;
 
-const Reactions: FC<OwnProps> = ({
+const Reactions = ({
   message,
   threadId,
   isOutside,
-  maxWidth,
   metaChildren,
   observeIntersection,
   noRecentReactors,
   isCurrentUserPremium,
   tags,
   isAccountFrozen,
-}) => {
+}: OwnProps) => {
   const {
     toggleReaction,
     addLocalPaidReaction,
@@ -65,7 +61,7 @@ const Reactions: FC<OwnProps> = ({
     showNotification,
     openFrozenAccountModal,
   } = getActions();
-  const lang = useOldLang();
+  const lang = useLang();
 
   const { results, areTags, recentReactions } = message.reactions!;
   const withServiceReactions = Boolean(message.areReactionsPossible && message.reactions);
@@ -155,9 +151,18 @@ const Reactions: FC<OwnProps> = ({
 
     showNotification({
       localId: getMessageKey(message),
-      title: lang('StarsSentTitle'),
-      message: lang('StarsSentText', paidLocalCount),
-      actionText: lang('StarsSentUndo'),
+      title: {
+        key: 'StarsSentTitle',
+        options: { withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'] },
+      },
+      message: {
+        key: 'StarsSentText',
+        variables: { count: paidLocalCount },
+        options: {
+          pluralValue: paidLocalCount, withNodes: true, withMarkdown: true, renderTextFilters: ['br', 'links'],
+        },
+      },
+      actionText: { key: 'ButtonUndo' },
       cacheBreaker: paidLocalCount.toString(),
       action: {
         action: 'resetLocalPaidReactions',
@@ -172,7 +177,7 @@ const Reactions: FC<OwnProps> = ({
       disableClickDismiss: true,
       icon: 'star',
     });
-  }, [lang, message, paidLocalCount]);
+  }, [message, paidLocalCount]);
 
   const handleRemoveReaction = useLastCallback((reaction: ApiReaction) => {
     if (isAccountFrozen) {
@@ -202,7 +207,6 @@ const Reactions: FC<OwnProps> = ({
         isOutside && 'is-outside',
         withServiceReactions && 'is-service',
       )}
-      style={maxWidth ? `max-width: ${maxWidth}px` : undefined}
       dir={lang.isRtl ? 'rtl' : 'ltr'}
     >
       {props.map(({

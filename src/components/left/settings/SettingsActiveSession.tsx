@@ -1,16 +1,15 @@
-import type { FC } from '../../../lib/teact/teact';
 import { memo, useCallback } from '../../../lib/teact/teact';
 import { getActions, withGlobal } from '../../../global';
 
 import type { ApiSession } from '../../../api/types';
 
-import buildClassName from '../../../util/buildClassName';
-import { formatDateTimeToString } from '../../../util/dates/oldDateFormat';
-import getSessionIcon from './helpers/getSessionIcon';
+import { formatDateTime, secondsToDate } from '../../../util/localization/dateFormat';
+import getSessionIcon, { DEVICE_BACKDROP } from './helpers/getSessionIcon';
 
 import useCurrentOrPrev from '../../../hooks/useCurrentOrPrev';
 import useLang from '../../../hooks/useLang';
 
+import IconBackdrop from '../../gili/primitives/IconBackdrop';
 import Switch from '../../gili/primitives/Switch';
 import Button from '../../ui/Button';
 import ListItem from '../../ui/ListItem';
@@ -28,9 +27,9 @@ type StateProps = {
   session?: ApiSession;
 };
 
-const SettingsActiveSession: FC<OwnProps & StateProps> = ({
+const SettingsActiveSession = ({
   isOpen, session, onClose,
-}) => {
+}: OwnProps & StateProps) => {
   const { changeSessionSettings, terminateAuthorization } = getActions();
   const lang = useLang();
 
@@ -75,6 +74,8 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
     );
   }
 
+  const { icon, color } = DEVICE_BACKDROP[getSessionIcon(renderingSession)];
+
   return (
     <Modal
       header={renderHeader()}
@@ -83,14 +84,14 @@ const SettingsActiveSession: FC<OwnProps & StateProps> = ({
       onClose={onClose}
       className={styles.SettingsActiveSession}
     >
-      <div className={buildClassName(
-        styles.iconDevice,
-        renderingSession && styles[`iconDevice__${getSessionIcon(renderingSession)}`],
-      )}
+      <IconBackdrop
+        className={styles.iconDevice}
+        color={color}
+        icon={icon}
       />
       <h3 className={styles.title} dir="auto">{renderingSession?.deviceModel}</h3>
       <div className={styles.date} aria-label={lang('PrivacySettingsLastSeen')}>
-        {formatDateTimeToString(renderingSession.dateActive * 1000, lang.code)}
+        {formatDateTime(lang, secondsToDate(renderingSession.dateActive), { date: 'short', time: 'short' })}
       </div>
 
       <dl className={styles.box}>

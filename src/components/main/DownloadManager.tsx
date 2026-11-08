@@ -63,7 +63,7 @@ const DownloadManager = ({
 
       if (size > MAX_BUFFER_SIZE && !IS_OPFS_SUPPORTED && !IS_SERVICE_WORKER_SUPPORTED) {
         showNotification({
-          message: 'Downloading files bigger than 2GB is not supported in your browser.',
+          message: { key: 'DownloadSizeUnsupported' },
         });
         handleMediaDownloaded(mediaHash);
         return;
@@ -81,10 +81,10 @@ const DownloadManager = ({
           const url = new URL(result, window.document.baseURI);
           url.searchParams.set('filename', encodeURIComponent(filename));
           const downloadWindow = window.open(url.toString());
-          // eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener
+
           downloadWindow?.addEventListener('beforeunload', () => {
             showNotification({
-              message: 'Download started. Please, do not close the app before it is finished.',
+              message: { key: 'DownloadKeepAppOpen' },
             });
           }, { once: true });
         } else if (result) {

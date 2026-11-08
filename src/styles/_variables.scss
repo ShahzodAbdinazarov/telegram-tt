@@ -102,7 +102,7 @@
     --color-interactive-inactive: rgba(var(--color-text-secondary-rgb), 0.25);
     --color-interactive-buffered: rgba(var(--color-text-secondary-rgb), 0.25); // Overlays underlying inactive element
     --color-interactive-element-hover: rgba(var(--color-text-secondary-rgb), 0.08);
-    --color-composer-button: #{$color-text-secondary}CC;
+    --color-composer-button: #{$color-black};
     --color-toast-background: #202020CC;
 
     --color-voice-transcribe-button: #e8f3ff;
@@ -228,12 +228,14 @@
 
     --vh: 1vh;
 
-    --border-radius-button: 1rem;
-    --border-radius-button-tiny: 0.875rem;
+    --border-radius-button: 1.75rem;
+    --border-radius-button-tiny: 1.125rem;
     --border-radius-modal: 2rem;
+    --border-radius-menu: 1rem;
+    --border-radius-list-item: 1rem;
     --border-radius-toast: 1rem;
     --border-radius-island: 1.5rem;
-    --border-radius-pane: 2rem;
+    --border-radius-pane: 1.5rem;
     --shadow-island: 0 1px 4px 0 #0000000D;
     --shadow-pane: 0 1px 5px -1px rgba(0, 0, 0, 0.21);
     --shadow-footer: 0 1px 8px 1px rgba(0, 0, 0, 0.12);
@@ -249,9 +251,11 @@
     --right-column-padding: 1rem;
     --right-column-content-width: calc(var(--right-column-width) - var(--right-column-padding));
     --middle-panel-inline-padding: 1rem;
+    --chat-list-inline-inset: 0.5rem;
     --folders-sidebar-width: 5rem;
     --window-controls-width: 0rem;
     --middle-header-height: 3rem;
+    --middle-header-gap: 0.5rem;
     --column-header-height: 4rem;
     --emoji-size: 1.25em;
     --custom-emoji-size: var(--emoji-size);
@@ -272,6 +276,7 @@
     --z-ui-loader-mask: 2000;
     --z-notification: 1700;
     --z-confetti: 1600;
+    --z-round-video-recorder: 1160;
     --z-story-viewer: 1150;
     --z-reaction-interaction-effect: 1100;
     --z-right-column: 900;
@@ -297,6 +302,7 @@
     --z-left-header: 11;
     --z-middle-header: 11;
     --z-middle-footer: 11;
+    --z-middle-header-panes: 10;
     --z-scroll-notch: 10;
     --z-story-ribbon: 10;
     --z-country-code-input-group: 10;
@@ -327,6 +333,8 @@
     --layer-transition: 300ms cubic-bezier(0.33, 1, 0.68, 1);
     --layer-transition-behind: 300ms cubic-bezier(0.33, 1, 0.68, 1);
     --slide-transition: 300ms cubic-bezier(0.25, 1, 0.5, 1);
+    --top-stack-transition: 450ms cubic-bezier(0.25, 1, 0.5, 1);
+    --mask-glide-transition: 150ms;
     --select-transition: 200ms ease-out;
     --chat-transform-transition: 0.2s ease-out;
 
@@ -341,6 +349,7 @@
     --font-weight-medium: 500;
 
     --middle-header-panes-height: 0px;
+    --middle-header-player-height: 0px;
 
     body.is-ios {
       --layer-transition: 650ms cubic-bezier(0.22, 1, 0.36, 1);

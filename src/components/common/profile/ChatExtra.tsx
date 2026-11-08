@@ -11,6 +11,7 @@ import type {
   ApiUserFullInfo,
   ApiUsername,
 } from '../../../api/types';
+import type { RegularLangKey } from '../../../types/language';
 import { MAIN_THREAD_ID } from '../../../api/types';
 import { type BotAppPermissions, ManagementScreens } from '../../../types';
 
@@ -20,6 +21,7 @@ import {
 import {
   getChatLink,
   getHasAdminRight,
+  getMainUsername,
   isChatAdmin,
   isChatChannel,
   isUserRightBanned,
@@ -55,16 +57,17 @@ import useCollapsibleLines from '../../../hooks/element/useCollapsibleLines';
 import useEffectWithPrevDeps from '../../../hooks/useEffectWithPrevDeps';
 import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
-import Island from '../../gili/layout/Island';
+import Island, { IslandDescription } from '../../gili/layout/Island';
 import Switch from '../../gili/primitives/Switch';
 import Chat from '../../left/main/Chat';
 import Button from '../../ui/Button';
+import Link from '../../ui/Link';
 import ListItem from '../../ui/ListItem';
 import CompactMapPreview from '../CompactMapPreview';
 import CustomEmoji from '../CustomEmoji';
 import Icon from '../icons/Icon';
+import QrIcon from '../icons/QrIcon';
 import SafeLink from '../SafeLink';
 import BusinessHours from './BusinessHours';
 import UserBirthday from './UserBirthday';
@@ -97,6 +100,7 @@ type StateProps = {
   isBotCanManageEmojiStatus?: boolean;
   botAppPermissions?: BotAppPermissions;
   botVerification?: ApiBotVerification;
+  botManager?: ApiUser;
   canViewSubscribers?: boolean;
 };
 
@@ -128,6 +132,7 @@ const ChatExtra = ({
   isBotCanManageEmojiStatus,
   botAppPermissions,
   botVerification,
+  botManager,
   className,
   style,
   isInSettings,
@@ -145,6 +150,8 @@ const ChatExtra = ({
     toggleUserEmojiStatusPermission,
     toggleUserLocationPermission,
     requestNextManagementScreen,
+    openQrCodeModal,
+    openChatWithInfo,
   } = getActions();
 
   const {
@@ -162,7 +169,7 @@ const ChatExtra = ({
     birthday,
     note,
   } = userFullInfo || {};
-  const oldLang = useOldLang();
+
   const lang = useLang();
 
   const { startViewTransition } = useViewTransition();
@@ -179,8 +186,7 @@ const ChatExtra = ({
   } = useCollapsibleLines(
     noteTextRef,
     NOTE_MAX_LINES,
-    undefined,
-    !shouldRenderNote,
+    { isDisabled: !shouldRenderNote },
   );
 
   useEffectWithPrevDeps(([prevPeerId]) => {
@@ -232,7 +238,7 @@ const ChatExtra = ({
     const { address, geo } = businessLocation!;
     if (!geo) {
       copyTextToClipboard(address);
-      showNotification({ message: oldLang('BusinessLocationCopied') });
+      showNotification({ message: lang('BusinessLocationCopied') });
       return;
     }
 
@@ -281,9 +287,9 @@ const ChatExtra = ({
     });
   });
 
-  function copy(text: string, entity: string) {
+  function copy(text: string, key: RegularLangKey) {
     copyTextToClipboard(text);
-    showNotification({ message: `${entity} was copied` });
+    showNotification({ message: { key } });
   }
 
   const formattedNumber = phoneNumber && formatPhoneNumberWithCode(phoneCodeList, phoneNumber);
@@ -293,7 +299,7 @@ const ChatExtra = ({
       requestCollectibleInfo({ collectible: phoneNumber, peerId: peerId!, type: 'phone' });
       return;
     }
-    copy(formattedNumber!, oldLang('Phone'));
+    copy(formattedNumber!, 'PhoneCopied');
   });
 
   const handleUsernameClick = useLastCallback((username: ApiUsername, isChat?: boolean) => {
@@ -301,11 +307,21 @@ const ChatExtra = ({
       requestCollectibleInfo({ collectible: username.username, peerId: peerId!, type: 'username' });
       return;
     }
-    copy(formatUsername(username.username, isChat), oldLang(isChat ? 'Link' : 'Username'));
+    copy(formatUsername(username.username, isChat), isChat ? 'LinkCopied' : 'UsernameCopied');
   });
 
   const handleOpenSubscribers = useLastCallback(() => {
     requestNextManagementScreen({ screen: ManagementScreens.ChannelSubscribers });
+  });
+
+  const handleOpenQrCode = useLastCallback((e: React.MouseEvent) => {
+    stopEvent(e);
+    if (!peerId) return;
+    openQrCodeModal({ peerId });
+  });
+
+  const handleBotManagerClick = useLastCallback(() => {
+    openChatWithInfo({ id: botManager!.id });
   });
 
   const handleOpenApp = useLastCallback(() => {
@@ -339,43 +355,44 @@ const ChatExtra = ({
   function renderUsernames(usernameList: ApiUsername[], isChat?: boolean) {
     const [mainUsername, ...otherUsernames] = usernameList;
 
-    const usernameLinks = otherUsernames.length
-      ? (oldLang('UsernameAlso', '%USERNAMES%'))
-        .split('%')
-        .map((s) => {
-          return (s === 'USERNAMES' ? (
-            <>
-              {otherUsernames.map((username, idx) => {
-                return (
-                  <>
-                    {idx > 0 ? ', ' : ''}
-                    <a
-                      key={username.username}
-                      href={formatUsername(username.username, true)}
-                      onMouseDown={stopEvent}
-                      onClick={(e) => {
-                        stopEvent(e);
-                        handleUsernameClick(username, isChat);
-                      }}
-                      className="text-entity-link username-link"
-                    >
-                      {formatUsername(username.username)}
-                    </a>
-                  </>
-                );
-              })}
-            </>
-          ) : s);
-        })
-      : undefined;
+    const usernameLinks = otherUsernames.length ? lang('UsernameAlso', {
+      usernames: otherUsernames.map((username, index) => (
+        <>
+          {index > 0 ? ', ' : ''}
+          <a
+            key={username.username}
+            href={formatUsername(username.username, true)}
+            onMouseDown={stopEvent}
+            onClick={(e) => {
+              stopEvent(e);
+              handleUsernameClick(username, isChat);
+            }}
+            className="text-entity-link username-link"
+          >
+            {formatUsername(username.username)}
+          </a>
+        </>
+      )),
+    }, { withNodes: true }) : undefined;
 
     return (
       <ListItem
-        icon={isChat ? 'link' : 'mention'}
+        icon={isChat ? 'link' : 'mention-filled'}
+        iconBg={isChat ? 'orange' : 'blue'}
         multiline
         narrow
         ripple
-
+        rightElement={(
+          <Button
+            round
+            size="smaller"
+            color="translucent"
+            ariaLabel={lang('QrCodeTitle')}
+            onClick={handleOpenQrCode}
+          >
+            <QrIcon />
+          </Button>
+        )}
         onClick={() => {
           handleUsernameClick(mainUsername, isChat);
         }}
@@ -384,8 +401,8 @@ const ChatExtra = ({
           {formatUsername(mainUsername.username, isChat)}
         </span>
         <span className="subtitle">
-          {usernameLinks && <span className="other-usernames">{usernameLinks}</span>}
-          {oldLang(isChat ? 'Link' : 'Username')}
+          {Boolean(otherUsernames.length) && <span className="other-usernames">{usernameLinks}</span>}
+          {lang(isChat ? 'SetUrlPlaceholder' : 'Username')}
         </span>
       </ListItem>
     );
@@ -403,9 +420,11 @@ const ChatExtra = ({
       )}
       {personalChannel && (
         <div className={styles.personalChannel} style={createVtnStyle('personalChannel')}>
-          <h3 className={styles.personalChannelTitle}>{oldLang('ProfileChannel')}</h3>
+          <h3 className={styles.personalChannelTitle}>{lang('ProfileChannel')}</h3>
           <span className={styles.personalChannelSubscribers}>
-            {oldLang('Subscribers', personalChannel.membersCount, 'i')}
+            {personalChannel.membersCount !== undefined && lang('Subscribers', {
+              count: lang.number(personalChannel.membersCount),
+            }, { pluralValue: personalChannel.membersCount })}
           </span>
           <Island className={styles.personalChannelItem}>
             <Chat
@@ -422,7 +441,8 @@ const ChatExtra = ({
       <Island>
         {Boolean(formattedNumber?.length) && (
           <ListItem
-            icon="phone"
+            icon="phone-filled"
+            iconBg="green"
             className={styles.phone}
             multiline
             narrow
@@ -431,13 +451,14 @@ const ChatExtra = ({
             style={createVtnStyle('phone')}
           >
             <span className="title" dir={lang.isRtl ? 'rtl' : undefined}>{formattedNumber}</span>
-            <span className="subtitle">{oldLang('Phone')}</span>
+            <span className="subtitle">{lang('Phone')}</span>
           </ListItem>
         )}
         {activeUsernames && renderUsernames(activeUsernames)}
         {description && Boolean(description.length) && (
           <ListItem
-            icon="info"
+            icon="info-filled"
+            iconBg="gray"
             className={styles.description}
             multiline
             narrow
@@ -454,22 +475,23 @@ const ChatExtra = ({
                 ])
               }
             </span>
-            <span className="subtitle">{oldLang(userId ? 'UserBio' : 'Info')}</span>
+            <span className="subtitle">{lang(userId ? 'UserBio' : 'Info')}</span>
           </ListItem>
         )}
         {activeChatUsernames && !isTopicInfo && renderUsernames(activeChatUsernames, true)}
         {((!activeChatUsernames && canInviteUsers) || isTopicInfo) && link && (
           <ListItem
             icon="link"
+            iconBg="orange"
             multiline
             className={styles.link}
             narrow
             ripple
-            onClick={() => copy(link, oldLang('SetUrlPlaceholder'))}
+            onClick={() => copy(link, 'LinkCopied')}
             style={createVtnStyle('link')}
           >
             <div className="title">{link}</div>
-            <span className="subtitle">{oldLang('SetUrlPlaceholder')}</span>
+            <span className="subtitle">{lang('SetUrlPlaceholder')}</span>
           </ListItem>
         )}
         {birthday && (
@@ -487,7 +509,7 @@ const ChatExtra = ({
               className={styles.openAppButton}
               onClick={handleOpenApp}
             >
-              {oldLang('ProfileBotOpenApp')}
+              {lang('OpenApp')}
             </Button>
             <div className={styles.sectionInfo}>
               {appTermsInfo}
@@ -496,7 +518,8 @@ const ChatExtra = ({
         )}
         {!isOwnProfile && !isInSettings && (
           <ListItem
-            icon={isMuted ? 'mute' : 'unmute'}
+            icon="notifications-filled"
+            iconBg="red"
             className={styles.notifications}
             narrow
             ripple
@@ -516,7 +539,8 @@ const ChatExtra = ({
         )}
         {businessLocation && (
           <ListItem
-            icon="location"
+            icon="location-filled"
+            iconBg="green"
             ripple
             multiline
             narrow
@@ -526,13 +550,13 @@ const ChatExtra = ({
             onClick={handleClickLocation}
           >
             <div className="title">{businessLocation.address}</div>
-            <span className="subtitle">{oldLang('BusinessProfileLocation')}</span>
+            <span className="subtitle">{lang('BusinessProfileLocation')}</span>
           </ListItem>
         )}
         {shouldRenderNote && (
           <ListItem
-            icon="note"
-            iconClassName={styles.noteListItemIcon}
+            icon="note-filled"
+            iconBg="green"
             multiline
             narrow
             isStatic
@@ -578,26 +602,28 @@ const ChatExtra = ({
         )}
         {hasSavedMessages && !isOwnProfile && !isInSettings && (
           <ListItem
-            icon="saved-messages"
+            icon="saved-messages-filled"
+            iconBg="blue"
             className={styles.savedMessages}
             narrow
             ripple
             onClick={handleOpenSavedDialog}
             style={createVtnStyle('savedMessages')}
           >
-            <span>{oldLang('SavedMessagesTab')}</span>
+            <span>{lang('MenuSavedMessages')}</span>
           </ListItem>
         )}
         {userFullInfo && 'isBotAccessEmojiGranted' in userFullInfo && (
           <ListItem
-            icon="user"
+            icon="user-filled"
+            iconBg="blue"
             className={styles.botEmojiStatus}
             narrow
             ripple
             onClick={manageEmojiStatusChange}
             style={createVtnStyle('botEmojiStatus')}
           >
-            <span>{oldLang('BotProfilePermissionEmojiStatus')}</span>
+            <span>{lang('BotProfilePermissionEmojiStatus')}</span>
             <Switch
               checked={Boolean(isBotCanManageEmojiStatus)}
               className={styles.switch}
@@ -606,14 +632,15 @@ const ChatExtra = ({
         )}
         {botAppPermissions?.geolocation !== undefined && (
           <ListItem
-            icon="location"
+            icon="location-filled"
+            iconBg="green"
             className={styles.botLocation}
             narrow
             ripple
             onClick={handleLocationPermissionChange}
             style={createVtnStyle('botLocation')}
           >
-            <span>{oldLang('BotProfilePermissionLocation')}</span>
+            <span>{lang('BotProfilePermissionLocation')}</span>
             <Switch
               checked={Boolean(botAppPermissions?.geolocation)}
               className={styles.switch}
@@ -622,7 +649,8 @@ const ChatExtra = ({
         )}
         {canViewSubscribers && (
           <ListItem
-            icon="group"
+            icon="group-filled"
+            iconBg="green"
             narrow
             multiline
             ripple
@@ -645,8 +673,26 @@ const ChatExtra = ({
           </div>
         )}
       </Island>
+      {botManager && renderBotManager(botManager)}
     </div>
   );
+
+  function renderBotManager(manager: ApiUser) {
+    const username = getMainUsername(manager);
+
+    return (
+      <IslandDescription className={styles.botManager} style={createVtnStyle('botManager')}>
+        <Icon name="code" className={styles.botManagerIcon} />
+        {lang('ProfileBotManagedBy', {
+          bot: (
+            <Link isPrimary onClick={handleBotManagerClick}>
+              {username ? formatUsername(username) : getPeerTitle(lang, manager)}
+            </Link>
+          ),
+        }, { withNodes: true })}
+      </IslandDescription>
+    );
+  }
 };
 
 export default memo(withGlobal<OwnProps>(
@@ -665,6 +711,7 @@ export default memo(withGlobal<OwnProps>(
     const userFullInfo = user && selectUserFullInfo(global, user.id);
 
     const botVerification = userFullInfo?.botVerification || chatFullInfo?.botVerification;
+    const botManager = userFullInfo?.botManagerId ? selectUser(global, userFullInfo.botManagerId) : undefined;
 
     const chatInviteLink = chatFullInfo?.inviteLink;
     const description = userFullInfo?.bio || chatFullInfo?.about;
@@ -702,6 +749,7 @@ export default memo(withGlobal<OwnProps>(
       hasMainMiniApp,
       isBotCanManageEmojiStatus: userFullInfo?.isBotCanManageEmojiStatus,
       botVerification,
+      botManager,
       canViewSubscribers,
     };
   },

@@ -13,6 +13,13 @@
   margin-inline-end: calc(max($margin - var(--scrollbar-width), $forceSpace));
 }
 
+// The inline-end side gives up whatever width the scrollbar takes
+@mixin scrollable-padding($top, $side: 1rem, $bottom: $side) {
+  padding: $top $side $bottom;
+
+  @include adapt-padding-to-scrollbar($side);
+}
+
 @mixin filter-outline($width: 0.125rem, $color) {
   filter:
     drop-shadow($width $width 0 $color)
@@ -109,7 +116,7 @@
   }
 }
 
-@mixin middle-header-pane {
+@mixin middle-header-pane-content {
   --pane-content-radius: calc(var(--border-radius-pane) - 0.25rem);
 
   position: absolute;
@@ -122,47 +129,37 @@
   padding-right: max(0.25rem, env(safe-area-inset-right));
   padding-bottom: 0.25rem;
   padding-left: max(0.25rem, env(safe-area-inset-left));
-  border-radius: var(--border-radius-pane);
 
+  opacity: 0;
   background-color: var(--color-background);
-  box-shadow: var(--shadow-pane);
 
-  transition: transform var(--slide-transition);
+  transition:
+    transform var(--pane-slide-transition, var(--slide-transition)),
+    opacity var(--pane-slide-transition, var(--slide-transition));
 }
 
-@mixin chat-list-pane {
+@mixin middle-header-pane-island {
+  @include middle-header-pane-content;
+
+  border-radius: var(--border-radius-pane);
+  opacity: 1;
+  box-shadow: var(--shadow-pane);
+}
+
+@mixin chat-list-pane-content {
   position: absolute;
   top: 0;
-  transform: translateY(calc(-100% - 0.5rem)); // Include top margin to hide fully
+  transform: translateY(-100%);
 
   width: 100%;
   padding: 0.5625rem;
-  border-radius: var(--border-radius-island);
 
+  opacity: 0;
   background-color: var(--color-background);
-  box-shadow: var(--shadow-chat-list-panel);
 
-  transition: transform var(--chat-transform-transition);
-
-  // Some panels might unmount without animation, so we provide same background above panel to make it less noticeable
-  &::after {
-    content: "";
-
-    position: absolute;
-    z-index: -1;
-    top: -100%;
-    right: 0;
-    left: 0;
-
-    height: inherit;
-
-    background-color: inherit;
-  }
-
-  :global(html.theme-dark) & {
-    border: 1px solid var(--color-borders);
-    box-shadow: none;
-  }
+  transition:
+    transform var(--pane-slide-transition, var(--slide-transition)),
+    opacity var(--pane-slide-transition, var(--slide-transition));
 }
 
 @mixin side-panel-section {
@@ -190,55 +187,20 @@
   }
 }
 
-@mixin chat-pattern-styles($path) {
-  content: "";
-
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-
-  opacity: 0.4;
-  background-image: url($path);
-  background-repeat: repeat;
-  background-position: center;
-  background-size: 430px auto;
-  mix-blend-mode: soft-light;
-
-  :global(html.theme-dark) & {
-    opacity: 0.25;
-    background: linear-gradient(145deg, #4f5bd5 0%, #962fbf 35%, #dd6cb9 65%, #fec496 100%) !important;
-    background-image: none;
-    mix-blend-mode: unset;
-
-    mask-image: url($path);
-    mask-repeat: repeat;
-    mask-position: center;
-    mask-size: 430px auto;
-  }
+@mixin composer-pill {
+  padding: var(--composer-pill-padding);
+  border-radius: var(--composer-pill-radius);
+  background: var(--color-background);
 }
 
-@mixin chat-pattern-background($path) {
-  &::before {
-    @include chat-pattern-styles($path);
-  }
-}
+@mixin composer-action-button-pill {
+  flex-shrink: 0;
 
-@mixin action-message-bg($isModule: false, $noBackground: false) {
-  @if not $noBackground {
-    background-color: var(--action-message-bg);
-  }
+  width: var(--composer-main-button-width);
+  height: var(--composer-main-button-height);
+  border-radius: var(--composer-control-radius);
 
-  @if $isModule {
-    :global(body.with-message-blur) & {
-      backdrop-filter: blur(4px);
-    }
-  }
+  color: white;
 
-  @else {
-    body.with-message-blur & {
-      backdrop-filter: blur(4px);
-    }
-  }
+  background: var(--color-primary);
 }

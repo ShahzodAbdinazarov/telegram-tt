@@ -1,5 +1,3 @@
-import type { FC } from '../../lib/teact/teact';
-import type React from '../../lib/teact/teact';
 import {
   memo, useEffect, useRef, useSignal, useState,
 } from '../../lib/teact/teact';
@@ -17,12 +15,13 @@ import useUnsupportedMedia from '../../hooks/media/useUnsupportedMedia';
 import useAppLayout from '../../hooks/useAppLayout';
 import useBuffering from '../../hooks/useBuffering';
 import useCurrentTimeSignal from '../../hooks/useCurrentTimeSignal';
+import useLang from '../../hooks/useLang';
 import useLastCallback from '../../hooks/useLastCallback';
 import usePictureInPicture from '../../hooks/usePictureInPicture';
 import useShowTransitionDeprecated from '../../hooks/useShowTransitionDeprecated';
 import useVideoCleanup from '../../hooks/useVideoCleanup';
 import useFullscreen from '../../hooks/window/useFullscreen';
-import useControlsSignal, { registerPlayerElement } from './hooks/useControlsSignal';
+import useControlsSignal, { isMouseInsideControls, registerPlayerElement } from './hooks/useControlsSignal';
 import useVideoWaitingSignal from './hooks/useVideoWaitingSignal';
 
 import Button from '../ui/Button';
@@ -59,7 +58,7 @@ const MAX_LOOP_DURATION = 30; // Seconds
 const MIN_READY_STATE = 4;
 const REWIND_STEP = 5; // Seconds
 
-const VideoPlayer: FC<OwnProps> = ({
+const VideoPlayer = ({
   url,
   storyboardInfo,
   isGif,
@@ -80,13 +79,15 @@ const VideoPlayer: FC<OwnProps> = ({
   timestamp,
   handleSponsoredClick,
   onClose,
-}) => {
+}: OwnProps) => {
   const {
     setMediaViewerVolume,
     setMediaViewerMuted,
     setMediaViewerPlaybackRate,
     setMediaViewerHidden,
   } = getActions();
+  const lang = useLang();
+
   const videoRef = useRef<HTMLVideoElement>();
   const [isPlaying, setIsPlaying] = useState(!IS_TOUCH_ENV || !IS_IOS);
   const [isFullscreen, setFullscreen, exitFullscreen] = useFullscreen(videoRef, setIsPlaying);
@@ -120,12 +121,18 @@ const VideoPlayer: FC<OwnProps> = ({
       lastMousePositionRef.current = getPointerPosition(e);
     };
 
+    const clearMousePosition = () => {
+      lastMousePositionRef.current = undefined;
+    };
+
     window.addEventListener('mousemove', updateMousePosition);
     window.addEventListener('touchmove', updateMousePosition);
+    document.documentElement.addEventListener('mouseleave', clearMousePosition);
 
     return () => {
       window.removeEventListener('mousemove', updateMousePosition);
       window.removeEventListener('touchmove', updateMousePosition);
+      document.documentElement.removeEventListener('mouseleave', clearMousePosition);
     };
   }, []);
 
@@ -137,11 +144,10 @@ const VideoPlayer: FC<OwnProps> = ({
   const checkMousePositionAndToggleControls = useLastCallback((clientX: number, clientY: number) => {
     const bounds = videoRef.current?.getBoundingClientRect();
     if (!bounds) return;
-    if (clientX <= bounds.left || clientX >= bounds.right
-      || clientY <= bounds.top || clientY >= bounds.bottom) {
-      if (!getIsSeeking()) {
-        toggleControls(false);
-      }
+    const isOutsideVideo = clientX <= bounds.left || clientX >= bounds.right
+      || clientY <= bounds.top || clientY >= bounds.bottom;
+    if (isOutsideVideo && !getIsSeeking() && !isMouseInsideControls()) {
+      toggleControls(false);
     }
   });
 
@@ -373,7 +379,7 @@ const VideoPlayer: FC<OwnProps> = ({
       )}
       {shouldRenderSpinner && (
         <div className={['spinner-container', spinnerClassNames].join(' ')}>
-          {!isBuffered && <div className="buffering">Buffering...</div>}
+          {!isBuffered && <div className="buffering">{lang('VideoPlayerBuffering')}</div>}
           <ProgressSpinner
             size="xl"
             progress={isBuffered ? 1 : loadProgress}

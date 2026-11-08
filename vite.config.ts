@@ -1,5 +1,6 @@
-import { readFileSync, statSync } from 'fs';
+import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
+import type { NormalizedOutputOptions, OutputBundle, PluginContext } from 'rolldown';
 import { bundleStats } from 'rollup-plugin-bundle-stats';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { fileURLToPath } from 'url';
@@ -7,11 +8,10 @@ import { defineConfig, loadEnv, normalizePath, type Plugin, type PluginOption, t
 import { type Target, viteStaticCopy } from 'vite-plugin-static-copy';
 import { watchAndRun } from 'vite-plugin-watch-and-run';
 
-import buildGitInfoPlugin from './plugins/gitInfo';
+import buildGitInfoPlugin from './plugins/gitInfo.ts';
 import packageJson from './package.json' with { type: 'json' };
 
 const DIR_NAME = dirname(fileURLToPath(import.meta.url));
-const CHANGELOG_PATH = resolve(DIR_NAME, 'src/versionNotification.txt');
 const PRODUCTION_URL = 'https://web.telegram.org/a';
 
 const { version: APP_VERSION } = packageJson;
@@ -20,19 +20,27 @@ const DEFAULT_BUNDLE_STATS_BASELINE_FILE = 'baseline.json';
 const BUNDLE_STATS_VISUALIZER_FILE = 'visualizer.html';
 const WORKER_BUNDLE_COLLECTOR_PLUGIN_NAME = 'telegram:collect-worker-report-bundle';
 const BUNDLE_REPORT_PLUGIN_SUFFIX = ':with-workers';
-const DEV_WARMUP_CLIENT_FILES = [
-  'index.html',
-  'src/**/*.{js,jsx,ts,tsx,css,scss}',
-  '!src/**/*.d.ts',
-  '!src/lib/gramjs/tl/**',
+const DEV_SERVER_WATCH_IGNORES = [
+  '**/.cache/**',
+  '**/dist/**',
+  '**/tauri/target/**',
+];
+const DEV_BUNDLE_WARMUP_CLIENT_FILES = [
+  'src/bundles/auth.ts',
+  'src/bundles/main.ts',
+  'src/bundles/extra.ts',
+  'src/bundles/calls.ts',
+  'src/bundles/stars.ts',
 ];
 const IMAGE_ASSET_RE = /\.(?:avif|gif|jpe?g|png|svg|webp)$/i;
-const STATIC_COPY_TARGETS: Target[] = [
+const WATCHED_STATIC_COPY_TARGETS: Target[] = [
   {
     src: normalizePath(resolve(DIR_NAME, 'node_modules/opus-recorder/dist/decoderWorker.min.wasm')),
     dest: 'assets',
     rename: { stripBase: true },
   },
+];
+const UNWATCHED_STATIC_COPY_TARGETS: Target[] = [
   {
     src: normalizePath(resolve(DIR_NAME, 'node_modules/emoji-data-ios/img-apple-64/**/*')),
     dest: '.',
@@ -51,16 +59,15 @@ type BundleReportPlugin = {
 };
 
 type BundleReportHook = (
-  this: unknown,
-  outputOptions: unknown,
-  bundle: ReportOutputBundle,
+  this: PluginContext,
+  outputOptions: NormalizedOutputOptions,
+  bundle: OutputBundle,
   isWrite: boolean,
 ) => void | Promise<void>;
 
-type ReportOutputBundle = Record<string, unknown>;
-
 export default defineConfig(({ mode }): UserConfig => {
   const env = loadEnv(mode, process.cwd(), '');
+  setViteEnv(env);
   const {
     HEAD = '',
     BUNDLE_STATS: bundleStatsValue = '',
@@ -70,7 +77,6 @@ export default defineConfig(({ mode }): UserConfig => {
     HTTPS_KEY_PATH: httpsKeyPath = '',
   } = env;
   const appEnv = env.APP_ENV || (mode === 'development' ? 'development' : 'production');
-  const appMockedClient = env.APP_MOCKED_CLIENT || '';
   const defaultAppTitle = `Telegram${appEnv !== 'production' ? ' Beta' : ''}`;
   const baseUrl = env.BASE_URL || PRODUCTION_URL;
   const appTitle = env.APP_TITLE || defaultAppTitle;
@@ -82,7 +88,7 @@ export default defineConfig(({ mode }): UserConfig => {
   const isDevelopmentMode = mode === 'development';
   const telegramApiId = env.TELEGRAM_API_ID || '';
   const telegramApiHash = env.TELEGRAM_API_HASH || '';
-  const workerReportBundles: ReportOutputBundle[] = [];
+  const workerReportBundles: OutputBundle[] = [];
   const plugins: PluginOption[] = [
     buildGitInfoPlugin({
       appEnv,
@@ -90,7 +96,15 @@ export default defineConfig(({ mode }): UserConfig => {
       isDevelopmentMode,
       rootDir: DIR_NAME,
     }),
-    viteStaticCopy({ targets: STATIC_COPY_TARGETS }),
+    viteStaticCopy({ targets: WATCHED_STATIC_COPY_TARGETS }),
+    viteStaticCopy({
+      targets: UNWATCHED_STATIC_COPY_TARGETS,
+      watch: {
+        options: {
+          ignored: '**/*',
+        },
+      },
+    }),
     isDevelopmentMode && watchAndRun([
       {
         name: 'lang',
@@ -158,7 +172,6 @@ export default defineConfig(({ mode }): UserConfig => {
 
   setViteEnv({
     TG_APP_ENV: appEnv,
-    TG_APP_MOCKED_CLIENT: appMockedClient,
     TG_APP_NAME: env.APP_NAME || '',
     TG_APP_TITLE: appTitle,
     TG_PUBLIC_URL: baseUrl,
@@ -180,16 +193,9 @@ export default defineConfig(({ mode }): UserConfig => {
     },
     define: {
       APP_VERSION: JSON.stringify(APP_VERSION),
-      CHANGELOG_DATETIME: JSON.stringify(statSync(CHANGELOG_PATH, { throwIfNoEntry: false })?.mtime.getTime()),
     },
     resolve: {
       tsconfigPaths: true,
-      alias: [
-        ...(appMockedClient === '1' ? [{
-          find: /^(?:\.\/client|(?:\.\.\/)*lib\/gramjs\/client)\/TelegramClient$/,
-          replacement: resolve(DIR_NAME, 'src/lib/gramjs/client/MockClient.ts'),
-        }] : []),
-      ],
     },
     css: {
       modules: {
@@ -207,22 +213,15 @@ export default defineConfig(({ mode }): UserConfig => {
       },
       https: getHttpsConfig(httpsCertPath, httpsKeyPath),
       warmup: {
-        clientFiles: isDevelopmentMode ? DEV_WARMUP_CLIENT_FILES : [],
+        clientFiles: DEV_BUNDLE_WARMUP_CLIENT_FILES,
+      },
+      watch: {
+        ignored: DEV_SERVER_WATCH_IGNORES,
       },
     },
     build: {
       sourcemap: true,
       assetsInlineLimit: (filePath) => (IMAGE_ASSET_RE.test(filePath) ? false : undefined),
-      rolldownOptions: {
-        output: {
-          manualChunks(id) {
-            if (id.includes('/src/components/ui/')) {
-              return 'shared-components';
-            }
-            return undefined;
-          },
-        },
-      },
     },
     worker: {
       plugins: shouldCollectWorkerReportBundles ? () => [
@@ -238,11 +237,11 @@ export default defineConfig(({ mode }): UserConfig => {
   };
 });
 
-function createBundleReportPlugin(plugin: BundleReportPlugin, workerReportBundles: ReportOutputBundle[]): Plugin {
+function createBundleReportPlugin(plugin: BundleReportPlugin, workerReportBundles: OutputBundle[]): Plugin {
   return {
     name: `${plugin.name}${BUNDLE_REPORT_PLUGIN_SUFFIX}`,
     async generateBundle(outputOptions, bundle, isWrite) {
-      const generateBundle = plugin.generateBundle as BundleReportHook | undefined;
+      const generateBundle = parseBundleReportHook(plugin.generateBundle);
 
       await generateBundle?.call(
         this,
@@ -254,7 +253,7 @@ function createBundleReportPlugin(plugin: BundleReportPlugin, workerReportBundle
   };
 }
 
-function createWorkerBundleCollectorPlugin(workerReportBundles: ReportOutputBundle[]): Plugin {
+function createWorkerBundleCollectorPlugin(workerReportBundles: OutputBundle[]): Plugin {
   return {
     name: WORKER_BUNDLE_COLLECTOR_PLUGIN_NAME,
     generateBundle(_outputOptions, bundle) {
@@ -263,12 +262,24 @@ function createWorkerBundleCollectorPlugin(workerReportBundles: ReportOutputBund
   };
 }
 
-function mergeOutputBundles(bundle: ReportOutputBundle, workerReportBundles: ReportOutputBundle[]): ReportOutputBundle {
-  const result: ReportOutputBundle = {};
+function mergeOutputBundles(bundle: OutputBundle, workerReportBundles: OutputBundle[]): OutputBundle {
+  const result: OutputBundle = {};
 
   Object.assign(result, bundle, ...workerReportBundles);
 
   return result;
+}
+
+function parseBundleReportHook(hook: unknown): BundleReportHook | undefined {
+  if (typeof hook === 'function') {
+    return hook as BundleReportHook;
+  }
+
+  if (!hook || typeof hook !== 'object' || !('handler' in hook) || typeof hook.handler !== 'function') {
+    return undefined;
+  }
+
+  return hook.handler as BundleReportHook;
 }
 
 function setViteEnv(env: Record<string, string>) {
@@ -280,8 +291,10 @@ function setViteEnv(env: Record<string, string>) {
 function buildCsp(appEnv: string) {
   return `
   default-src 'self';
-  connect-src 'self' wss://*.web.telegram.org blob: http: https: ${appEnv === 'development' ? 'wss: ipc:' : ''};
-  script-src 'self' 'wasm-unsafe-eval' https://t.me/_websync_ https://telegram.me/_websync_;
+  connect-src 'self' wss://*.web.telegram.org blob: http: https: wss: ${appEnv === 'development' ? 'ipc:' : ''};
+  script-src 'self' 'wasm-unsafe-eval'
+    https://t.me/_websync_ https://telegram.me/_websync_ https://telegram.dog/_websync_;
+  worker-src 'self'${appEnv === 'development' ? ' blob:' : ''};
   style-src 'self' 'unsafe-inline';
   font-src 'self' data:;
   img-src 'self' data: blob: https://ss3.4sqi.net/img/categories_v2/;

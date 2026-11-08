@@ -1,5 +1,4 @@
 import type { FC, TeactNode } from '../../lib/teact/teact';
-import type React from '../../lib/teact/teact';
 import { memo, useCallback, useRef } from '../../lib/teact/teact';
 
 import type { TextPart } from '../../types';
@@ -22,6 +21,7 @@ type OwnProps = {
   confirmLabel?: TeactNode;
   confirmIsDestructive?: boolean;
   isConfirmDisabled?: boolean;
+  isConfirmLoading?: boolean;
   isOnlyConfirm?: boolean;
   areButtonsInColumn?: boolean;
   className?: string;
@@ -41,6 +41,7 @@ const ConfirmDialog: FC<OwnProps> = ({
   confirmLabel,
   confirmIsDestructive,
   isConfirmDisabled,
+  isConfirmLoading,
   isOnlyConfirm,
   areButtonsInColumn,
   className,
@@ -53,9 +54,12 @@ const ConfirmDialog: FC<OwnProps> = ({
 
   const containerRef = useRef<HTMLDivElement>();
 
+  const isConfirmBlocked = isConfirmDisabled || isConfirmLoading;
+
+  // Enter confirms past the button, so it has to honour the block as well
   const handleSelectWithEnter = useCallback((index: number) => {
-    if (index === -1) confirmHandler();
-  }, [confirmHandler]);
+    if (index === -1 && !isConfirmBlocked) confirmHandler();
+  }, [confirmHandler, isConfirmBlocked]);
 
   const handleKeyDown = useKeyboardListNavigation(containerRef, isOpen, handleSelectWithEnter, '.Button');
 
@@ -85,7 +89,8 @@ const ConfirmDialog: FC<OwnProps> = ({
           inline
           onClick={confirmHandler}
           color={confirmIsDestructive ? 'danger' : 'primary'}
-          disabled={isConfirmDisabled}
+          isLoading={isConfirmLoading}
+          disabled={isConfirmBlocked}
           autoFocus={!confirmIsDestructive}
         >
           {confirmLabel || lang('GeneralConfirm')}

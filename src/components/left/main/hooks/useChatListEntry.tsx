@@ -1,12 +1,14 @@
 import {
-  useCallback, useLayoutEffect, useRef,
+  useCallback, useLayoutEffect, useMemo, useRef,
 } from '../../../../lib/teact/teact';
+import { getActions } from '../../../../global';
 
 import type {
   ApiChat, ApiDraft, ApiMessage, ApiPeer, ApiTopic, ApiTypingStatus,
   StatefulMediaContent,
 } from '../../../../api/types';
 import type { ObserveFn } from '../../../../hooks/useIntersectionObserver';
+import type { CommunityMember } from './useCommunityMembers';
 
 import { CHAT_HEIGHT_PX } from '../../../../config';
 import { requestMutation } from '../../../../lib/fasterdom/fasterdom';
@@ -15,6 +17,7 @@ import {
   getMessageRoundVideo,
   getMessageSticker,
   getMessageVideo,
+  isChatCommunity,
 } from '../../../../global/helpers';
 import { getMessageSenderName } from '../../../../global/helpers/peers';
 import { waitStartingTransitionsEnd } from '../../../../util/animations/waitTransitionEnd';
@@ -28,12 +31,17 @@ import useMessageMediaHash from '../../../../hooks/media/useMessageMediaHash';
 import useThumbnail from '../../../../hooks/media/useThumbnail';
 import useEnsureStory from '../../../../hooks/useEnsureStory';
 import useLang from '../../../../hooks/useLang';
+import useLastCallback from '../../../../hooks/useLastCallback';
 import useMedia from '../../../../hooks/useMedia';
 
+import Avatar from '../../../common/Avatar';
 import ChatForumLastMessage from '../../../common/ChatForumLastMessage';
+import ChatGroupedLastMessage from '../../../common/ChatGroupedLastMessage';
 import Icon from '../../../common/icons/Icon';
 import MessageSummary from '../../../common/MessageSummary';
 import TypingStatus from '../../../common/TypingStatus';
+
+import styles from '../../../common/ChatGroupedLastMessage.module.scss';
 
 function getLatestTypingStatusTimestamp(typingStatusByPeerId?: Record<string, ApiTypingStatus>) {
   if (!typingStatusByPeerId) {
@@ -49,6 +57,7 @@ export default function useChatListEntry({
   chat,
   topicIds,
   lastMessage,
+  communityMembers,
   statefulMediaContent,
   chatId,
   typingStatusByPeerId,
@@ -70,6 +79,7 @@ export default function useChatListEntry({
   chat?: ApiChat;
   topicIds?: number[];
   lastMessage?: ApiMessage;
+  communityMembers?: CommunityMember[];
   statefulMediaContent: StatefulMediaContent | undefined;
   chatId: string;
   typingStatusByPeerId?: Record<string, ApiTypingStatus>;
@@ -89,8 +99,35 @@ export default function useChatListEntry({
   shouldForceNonForumView?: boolean;
   onReorderAnimationEnd?: NoneToVoidFunction;
 }) {
+  const { openChat } = getActions();
+
   const lang = useLang();
   const ref = useRef<HTMLDivElement>();
+
+  const communityItems = useMemo(() => (
+    communityMembers?.map(({ id, title, peer, isUnread }) => ({
+      key: id,
+      title,
+      isUnread,
+      icon: (
+        <Avatar
+          peer={peer}
+          size="micro"
+          className={styles.avatar}
+        />
+      ),
+    }))
+  ), [communityMembers]);
+
+  // Mirrors a forum opening its unread topic
+  const handleCommunityMemberClick = useLastCallback(() => {
+    const mainCommunityMember = communityItems?.[0];
+    if (!mainCommunityMember?.isUnread) return false;
+
+    openChat({ id: mainCommunityMember.key, shouldReplaceHistory: true }, { forceOnHeavyAnimation: true });
+
+    return true;
+  });
 
   const storyData = lastMessage?.content.storyData;
   const shouldTryLoadingStory = statefulMediaContent && !statefulMediaContent.story;
@@ -144,8 +181,10 @@ export default function useChatListEntry({
       return undefined;
     }
 
+    // A community previews a message from its member chat
+    const senderChatId = chat && isChatCommunity(chat) ? lastMessage.chatId : chatId;
     const senderName = lastMessageSender
-      ? getMessageSenderName(lang, chatId, lastMessageSender)
+      ? getMessageSenderName(lang, senderChatId, lastMessageSender)
       : undefined;
 
     return (
@@ -169,6 +208,17 @@ export default function useChatListEntry({
   ]);
 
   function renderSubtitle() {
+    if (chat && isChatCommunity(chat)) {
+      return (
+        <ChatGroupedLastMessage
+          items={communityItems}
+          hasTags={hasTags}
+          renderLastMessage={renderLastMessageOrTyping}
+          onMainItemClick={handleCommunityMemberClick}
+        />
+      );
+    }
+
     const shouldRenderAsForum = chat?.isForum && !isTopic && !shouldForceNonForumView;
     if (shouldRenderAsForum) {
       return (

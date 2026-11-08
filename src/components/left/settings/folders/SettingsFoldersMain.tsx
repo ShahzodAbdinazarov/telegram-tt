@@ -340,7 +340,7 @@ const SettingsFoldersMain = ({
                       entities: folder.title.entities,
                       noCustomEmojiPlayback: folder.noTitleAnimations,
                     })}
-                    {isBlocked && <Icon name="lock-badge" className="settings-folders-blocked-icon" />}
+                    {isBlocked && <Icon name="lock-filled" className="settings-folders-blocked-icon" />}
                   </span>
                   <span className="subtitle">
                     {folder.isChatList && <Icon name="link" className="mr-1" />}
@@ -422,7 +422,7 @@ const SettingsFoldersMain = ({
               }
             }}
           />
-          {!isPremium && <Icon name="lock-badge" className="settings-folders-lock-icon" />}
+          {!isPremium && <Icon name="lock-filled" className="settings-folders-lock-icon" />}
         </div>
       </Island>
       {!isMobile && (

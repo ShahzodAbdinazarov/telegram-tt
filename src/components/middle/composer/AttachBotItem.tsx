@@ -1,5 +1,3 @@
-import type { FC } from '../../../lib/teact/teact';
-import type React from '../../../lib/teact/teact';
 import {
   memo, useMemo, useState,
 } from '../../../lib/teact/teact';
@@ -9,8 +7,8 @@ import type { ApiAttachBot } from '../../../api/types';
 import type { IAnchorPosition, ThemeKey, ThreadId } from '../../../types';
 
 import useFlag from '../../../hooks/useFlag';
+import useLang from '../../../hooks/useLang';
 import useLastCallback from '../../../hooks/useLastCallback';
-import useOldLang from '../../../hooks/useOldLang';
 
 import Menu from '../../ui/Menu';
 import MenuItem from '../../ui/MenuItem';
@@ -27,7 +25,7 @@ type OwnProps = {
   onMenuClosed: VoidFunction;
 };
 
-const AttachBotItem: FC<OwnProps> = ({
+const AttachBotItem = ({
   bot,
   theme,
   chatId,
@@ -36,10 +34,10 @@ const AttachBotItem: FC<OwnProps> = ({
   canShowNew,
   onMenuOpened,
   onMenuClosed,
-}) => {
+}: OwnProps) => {
   const { callAttachBot, toggleAttachBot } = getActions();
 
-  const lang = useOldLang();
+  const lang = useLang();
 
   const icon = useMemo(() => {
     return bot.icons.find(({ name }) => name === 'default_static')?.document;
@@ -108,7 +106,7 @@ const AttachBotItem: FC<OwnProps> = ({
           onClose={handleCloseMenu}
           onCloseAnimationEnd={handleCloseAnimationEnd}
         >
-          <MenuItem icon="stop" destructive onClick={handleRemoveBot}>{lang('WebApp.RemoveBot')}</MenuItem>
+          <MenuItem icon="stop" destructive onClick={handleRemoveBot}>{lang('WebAppRemoveBot')}</MenuItem>
         </Menu>
       )}
 
